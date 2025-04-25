@@ -1,0 +1,503 @@
+<script type="text/javascript">
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function filledCell(cell) {
+          return cell !== '' && cell != null;
+        }
+        function loadFileData(filename) {
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+            try {
+                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
+
+                // Convert sheet to JSON to filter blank rows
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                // Filter out blank rows (rows where all cells are empty, null, or undefined)
+                var filteredData = jsonData.filter(row => row.some(filledCell));
+
+                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
+                var headerRowIndex = filteredData.findIndex((row, index) =>
+                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                );
+                // Fallback
+                if (headerRowIndex === -1 || headerRowIndex > 25) {
+                  headerRowIndex = 0;
+                }
+
+                // Convert filtered JSON back to CSV
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
+            }
+        }
+        return gk_fileData[filename] || "";
+        }
+        </script><!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ScholarSync - Research Assistant Dashboard</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/tailwindcss/2.2.19/tailwind.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
+    <style>
+        .bg-scholar {
+            background-color: #f8f9fa;
+        }
+        .bg-scholar-accent {
+            background-color: #1a73e8;
+        }
+        .text-scholar {
+            color: #4285f4;
+        }
+        .border-scholar {
+            border-color: #dadce0;
+        }
+        .transition-height {
+            transition: max-height 0.3s ease-in-out;
+        }
+    </style>
+</head>
+<body class="bg-gray-50 font-sans">
+    <div class="flex h-screen overflow-hidden">
+        <!-- Sidebar -->
+        <div class="bg-white shadow-md w-64 flex-shrink-0 hidden md:block">
+            <div class="p-4 flex items-center space-x-2">
+                <i class="fas fa-graduation-cap text-2xl text-scholar"></i>
+                <h1 class="text-xl font-bold">ScholarSync</h1>
+            </div>
+            <div class="px-4 py-2">
+                <div class="relative">
+                    <input type="text" placeholder="Search projects..." class="w-full px-3 py-2 rounded-md border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm">
+                    <i class="fas fa-search absolute right-3 top-2.5 text-gray-400"></i>
+                </div>
+            </div>
+            <div class="mt-4">
+                <div class="px-4 py-2 text-sm font-medium text-gray-600">PROJECTS</div>
+                <div class="mt-1">
+                    <a href="#" class="px-4 py-2 flex items-center text-sm font-medium text-gray-900 bg-gray-100 hover:bg-gray-200">
+                        <i class="fas fa-flask mr-3 text-gray-500"></i>
+                        Quantum Computing Research
+                    </a>
+                    <a href="#" class="px-4 py-2 flex items-center text-sm font-medium text-gray-700 hover:bg-gray-100">
+                        <i class="fas fa-dna mr-3 text-gray-500"></i>
+                        Gene Therapy Analysis
+                    </a>
+                    <a href="#" class="px-4 py-2 flex items-center text-sm font-medium text-gray-700 hover:bg-gray-100">
+                        <i class="fas fa-brain mr-3 text-gray-500"></i>
+                        Neural Network Applications
+                    </a>
+                </div>
+                <div class="px-4 py-2 mt-4 text-sm font-medium text-gray-600">WORKFLOWS</div>
+                <div class="mt-1">
+                    <a href="#" class="px-4 py-2 flex items-center text-sm font-medium text-gray-700 hover:bg-gray-100">
+                        <i class="fas fa-book mr-3 text-gray-500"></i>
+                        Literature Review
+                    </a>
+                    <a href="#" class="px-4 py-2 flex items-center text-sm font-medium text-gray-700 hover:bg-gray-100">
+                        <i class="fas fa-chart-bar mr-3 text-gray-500"></i>
+                        Data Analysis
+                    </a>
+                    <a href="#" class="px-4 py-2 flex items-center text-sm font-medium text-gray-700 hover:bg-gray-100">
+                        <i class="fas fa-edit mr-3 text-gray-500"></i>
+                        Paper Writing
+                    </a>
+                </div>
+            </div>
+            <div class="absolute bottom-0 w-64 p-4">
+                <div class="flex items-center space-x-3">
+                    <img src="/api/placeholder/32/32" class="rounded-full" alt="User avatar">
+                    <div>
+                        <div class="font-medium text-sm">Dr. Sarah Johnson</div>
+                        <div class="text-xs text-gray-500">MIT Neuroscience</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Main Content -->
+        <div class="flex-1 flex flex-col overflow-hidden">
+            <!-- Top Navigation -->
+            <header class="bg-white shadow-sm">
+                <div class="flex items-center justify-between p-4">
+                    <div class="flex items-center">
+                        <button class="md:hidden mr-2">
+                            <i class="fas fa-bars text-gray-600"></i>
+                        </button>
+                        <h2 class="text-lg font-medium">Project Dashboard</h2>
+                    </div>
+                    <div class="flex items-center space-x-4">
+                        <button class="relative p-1 rounded-full text-gray-600 hover:bg-gray-100">
+                            <i class="fas fa-bell"></i>
+                            <span class="absolute top-0 right-0 h-2 w-2 rounded-full bg-red-500"></span>
+                        </button>
+                        <button class="p-1 rounded-full text-gray-600 hover:bg-gray-100">
+                            <i class="fas fa-cog"></i>
+                        </button>
+                    </div>
+                </div>
+            </header>
+
+            <!-- Page Content -->
+            <main class="flex-1 overflow-y-auto p-4 bg-gray-50">
+                <!-- Welcome Banner -->
+                <div class="bg-white rounded-lg shadow-sm p-6 mb-6">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <h1 class="text-2xl font-semibold text-gray-800">Welcome back, Dr. Johnson</h1>
+                            <p class="text-gray-600 mt-1">Your research assistant is ready to help. What would you like to work on today?</p>
+                        </div>
+                        <div class="hidden md:block">
+                            <button class="bg-scholar-accent hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-md shadow-sm">
+                                <i class="fas fa-plus mr-2"></i>New Project
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Project Overview -->
+                <h2 class="text-lg font-medium text-gray-800 mb-4">Active Project: Quantum Computing Research</h2>
+                
+                <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
+                    <!-- Workflow Status -->
+                    <div class="bg-white rounded-lg shadow-sm p-6">
+                        <div class="flex justify-between items-center mb-4">
+                            <h3 class="text-lg font-medium">Workflow Status</h3>
+                            <span class="text-xs font-medium px-2 py-1 bg-blue-100 text-blue-800 rounded-full">3 Active</span>
+                        </div>
+                        <div class="space-y-4">
+                            <div>
+                                <div class="flex justify-between text-sm mb-1">
+                                    <span class="font-medium">Literature Review</span>
+                                    <span class="text-green-600">78% Complete</span>
+                                </div>
+                                <div class="w-full bg-gray-200 rounded-full h-2">
+                                    <div class="bg-green-500 h-2 rounded-full" style="width: 78%"></div>
+                                </div>
+                            </div>
+                            <div>
+                                <div class="flex justify-between text-sm mb-1">
+                                    <span class="font-medium">Data Analysis</span>
+                                    <span class="text-blue-600">45% Complete</span>
+                                </div>
+                                <div class="w-full bg-gray-200 rounded-full h-2">
+                                    <div class="bg-blue-500 h-2 rounded-full" style="width: 45%"></div>
+                                </div>
+                            </div>
+                            <div>
+                                <div class="flex justify-between text-sm mb-1">
+                                    <span class="font-medium">Paper Draft</span>
+                                    <span class="text-yellow-600">12% Complete</span>
+                                </div>
+                                <div class="w-full bg-gray-200 rounded-full h-2">
+                                    <div class="bg-yellow-500 h-2 rounded-full" style="width: 12%"></div>
+                                </div>
+                            </div>
+                        </div>
+                        <button class="mt-4 w-full bg-gray-100 hover:bg-gray-200 text-gray-800 font-medium py-2 px-4 rounded-md text-sm">
+                            View All Workflows
+                        </button>
+                    </div>
+
+                    <!-- Recent Documents -->
+                    <div class="bg-white rounded-lg shadow-sm p-6">
+                        <h3 class="text-lg font-medium mb-4">Recent Documents</h3>
+                        <div class="space-y-3">
+                            <div class="flex items-center p-2 hover:bg-gray-50 rounded-md">
+                                <i class="fas fa-file-alt text-gray-500 mr-3"></i>
+                                <div class="flex-1">
+                                    <div class="text-sm font-medium">Literature Review Draft</div>
+                                    <div class="text-xs text-gray-500">Modified 2 hours ago</div>
+                                </div>
+                                <button class="text-gray-400 hover:text-gray-600">
+                                    <i class="fas fa-ellipsis-v"></i>
+                                </button>
+                            </div>
+                            <div class="flex items-center p-2 hover:bg-gray-50 rounded-md">
+                                <i class="fas fa-table text-gray-500 mr-3"></i>
+                                <div class="flex-1">
+                                    <div class="text-sm font-medium">Experiment Results (Apr 2025)</div>
+                                    <div class="text-xs text-gray-500">Modified yesterday</div>
+                                </div>
+                                <button class="text-gray-400 hover:text-gray-600">
+                                    <i class="fas fa-ellipsis-v"></i>
+                                </button>
+                            </div>
+                            <div class="flex items-center p-2 hover:bg-gray-50 rounded-md">
+                                <i class="fas fa-file-code text-gray-500 mr-3"></i>
+                                <div class="flex-1">
+                                    <div class="text-sm font-medium">Data Processing Scripts</div>
+                                    <div class="text-xs text-gray-500">Modified 3 days ago</div>
+                                </div>
+                                <button class="text-gray-400 hover:text-gray-600">
+                                    <i class="fas fa-ellipsis-v"></i>
+                                </button>
+                            </div>
+                        </div>
+                        <button class="mt-4 w-full bg-gray-100 hover:bg-gray-200 text-gray-800 font-medium py-2 px-4 rounded-md text-sm">
+                            Browse All Documents
+                        </button>
+                    </div>
+
+                    <!-- Recommended Actions -->
+                    <div class="bg-white rounded-lg shadow-sm p-6">
+                        <h3 class="text-lg font-medium mb-4">Recommended Actions</h3>
+                        <div class="space-y-3">
+                            <div class="p-3 bg-blue-50 border-l-4 border-blue-500 rounded-md">
+                                <div class="text-sm font-medium text-blue-800">Complete Literature Review</div>
+                                <div class="text-xs text-blue-600 mt-1">22 papers analyzed, 5 pending review</div>
+                                <button class="mt-2 bg-blue-100 hover:bg-blue-200 text-blue-800 text-xs font-medium py-1 px-2 rounded">
+                                    Continue
+                                </button>
+                            </div>
+                            <div class="p-3 bg-green-50 border-l-4 border-green-500 rounded-md">
+                                <div class="text-sm font-medium text-green-800">New relevant paper found</div>
+                                <div class="text-xs text-green-600 mt-1">"Quantum Computing Applications in ML" - MIT Press</div>
+                                <button class="mt-2 bg-green-100 hover:bg-green-200 text-green-800 text-xs font-medium py-1 px-2 rounded">
+                                    Review
+                                </button>
+                            </div>
+                            <div class="p-3 bg-purple-50 border-l-4 border-purple-500 rounded-md">
+                                <div class="text-sm font-medium text-purple-800">Draft Methods Section</div>
+                                <div class="text-xs text-purple-600 mt-1">Based on completed experiments</div>
+                                <button class="mt-2 bg-purple-100 hover:bg-purple-200 text-purple-800 text-xs font-medium py-1 px-2 rounded">
+                                    Start
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Knowledge Graph Section -->
+                <div class="bg-white rounded-lg shadow-sm p-6 mb-6">
+                    <div class="flex justify-between items-center mb-4">
+                        <h3 class="text-lg font-medium">Project Knowledge Graph</h3>
+                        <div>
+                            <button onclick="expandGraph()" class="text-sm bg-gray-100 hover:bg-gray-200 text-gray-800 font-medium py-1 px-3 rounded-md mr-2">
+                                <i class="fas fa-expand-arrows-alt mr-1"></i>Expand
+                            </button>
+                            <select onchange="filterGraph(this.value)" class="text-sm bg-gray-100 hover:bg-gray-200 text-gray-800 font-medium py-1 px-3 rounded-md">
+                                <option value="all">All Methodologies</option>
+                                <option value="experimental">Experimental</option>
+                                <option value="theoretical">Theoretical</option>
+                                <option value="statistical">Statistical</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div id="graph" class="aspect-w-16 aspect-h-9 bg-gray-100 rounded-md h-64"></div>
+                    <div class="mt-4 flex flex-wrap gap-2">
+                        <button class="topic-button text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded-full" onclick="highlightNode('Quantum Gates')">Quantum Gates</button>
+                        <button class="topic-button text-xs bg-green-100 text-green-800 px-2 py-1 rounded-full" onclick="highlightNode('Neural Networks')">Neural Networks</button>
+                        <button class="topic-button text-xs bg-purple-100 text-purple-800 px-2 py-1 rounded-full" onclick="highlightNode('Qubits')">Qubits</button>
+                        <button class="topic-button text-xs bg-yellow-100 text-yellow-800 px-2 py-1 rounded-full" onclick="highlightNode('Error Correction')">Error Correction</button>
+                        <button class="topic-button text-xs bg-red-100 text-red-800 px-2 py-1 rounded-full" onclick="highlightNode('Superposition')">Superposition</button>
+                    </div>
+                </div>
+
+                <!-- Agent Interactions -->
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    <!-- Literature Review Agent -->
+                    <div class="bg-white rounded-lg shadow-sm p-6">
+                        <div class="flex items-center mb-4">
+                            <div class="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center text-blue-600 mr-3">
+                                <i class="fas fa-book"></i>
+                            </div>
+                            <div>
+                                <h3 class="text-lg font-medium">Literature Review Agent</h3>
+                                <p class="text-sm text-gray-500">Research assistant</p>
+                            </div>
+                        </div>
+                        <div class="border border-gray-200 rounded-md p-3 bg-gray-50 mb-3">
+                            <p class="text-sm">I've analyzed 22 papers related to quantum computing and neural networks integration. Would you like me to focus on error correction techniques or scaling algorithms next?</p>
+                        </div>
+                        <div class="flex space-x-2">
+                            <button class="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-800 font-medium py-2 px-4 rounded-md text-sm">
+                                Error Correction
+                            </button>
+                            <button class="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-800 font-medium py-2 px-4 rounded-md text-sm">
+                                Scaling Algorithms
+                            </button>
+                        </div>
+                        <button class="mt-3 w-full bg-blue-500 hover:bg-blue-600 text-white font-medium py-2 px-4 rounded-md text-sm">
+                            Custom Request
+                        </button>
+                    </div>
+
+                    <!-- Writing Assistant Agent -->
+                    <div class="bg-white rounded-lg shadow-sm p-6">
+                        <div class="flex items-center mb-4">
+                            <div class="w-10 h-10 rounded-full bg-green-100 flex items-center justify-center text-green-600 mr-3">
+                                <i class="fas fa-edit"></i>
+                            </div>
+                            <div>
+                                <h3 class="text-lg font-medium">Writing Assistant</h3>
+                                <p class="text-sm text-gray-500">Paper drafting</p>
+                            </div>
+                        </div>
+                        <div class="border border-gray-200 rounded-md p-3 bg-gray-50 mb-3">
+                            <p class="text-sm">I've outlined the introduction and methodology sections based on your research notes. Ready to draft the introduction following IEEE format?</p>
+                        </div>
+                        <div class="flex space-x-2">
+                            <button class="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-800 font-medium py-2 px-4 rounded-md text-sm">
+                                Draft Introduction
+                            </button>
+                            <button class="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-800 font-medium py-2 px-4 rounded-md text-sm">
+                                Refine Outline
+                            </button>
+                        </div>
+                        <button class="mt-3 w-full bg-green-500 hover:bg-green-600 text-white font-medium py-2 px-4 rounded-md text-sm">
+                            Custom Writing Task
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Analysis Lab -->
+                <div class="bg-white rounded-lg shadow-sm p-6 mt-6">
+                    <h3 class="text-lg font-medium mb-4">Analysis Lab</h3>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <!-- Data Explorer -->
+                        <div class="border border-gray-200 rounded-md p-4">
+                            <h4 class="text-md font-medium mb-2">Data Explorer</h4>
+                            <p class="text-sm text-gray-600 mb-3">Visualize and analyze your research data.</p>
+                            <button class="bg-blue-500 hover:bg-blue-600 text-white font-medium py-2 px-4 rounded-md text-sm">
+                                Open Explorer
+                            </button>
+                        </div>
+                        <!-- Hypothesis Builder -->
+                        <div class="border border-gray-200 rounded-md p-4">
+                            <h4 class="text-md font-medium mb-2">Hypothesis Builder</h4>
+                            <p class="text-sm text-gray-600 mb-3">Formulate and manage your research hypotheses.</p>
+                            <button class="bg-purple-500 hover:bg-purple-600 text-white font-medium py-2 px-4 rounded-md text-sm">
+                                Create Hypothesis
+                            </button>
+                        </div>
+                    </div>
+                    <!-- AI Suggestions -->
+                    <div class="mt-4">
+                        <h4 class="text-md font-medium mb-2">AI Suggestions</h4>
+                        <div class="space-y-3">
+                            <div class="p-3 bg-yellow-50 border-l-4 border-yellow-500 rounded-md">
+                                <div class="text-sm font-medium text-yellow-800">Potential correlation detected</div>
+                                <div class="text-xs text-yellow-600 mt-1">Between quantum gate fidelity and error rates</div>
+                                <button class="mt-2 bg-yellow-100 hover:bg-yellow-200 text-yellow-800 text-xs font-medium py-1 px-2 rounded">
+                                    Explore
+                                </button>
+                            </div>
+                            <div class="p-3 bg-yellow-50 border-l-4 border-yellow-500 rounded-md">
+                                <div class="text-sm font-medium text-yellow-800">Group difference observed</div>
+                                <div class="text-xs text-yellow-600 mt-1">In performance metrics across algorithms</div>
+                                <button class="mt-2 bg-yellow-100 hover:bg-yellow-200 text-yellow-800 text-xs font-medium py-1 px-2 rounded">
+                                    Explore
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </main>
+        </div>
+        
+        <!-- Agent Chat Panel (Hidden by default) -->
+        <div class="fixed bottom-4 right-4 w-80 shadow-lg rounded-lg bg-white overflow-hidden" style="height: 480px; display: none;">
+            <div class="bg-scholar-accent text-white p-3 flex justify-between items-center">
+                <div class="flex items-center">
+                    <i class="fas fa-robot mr-2"></i>
+                    <span class="font-medium">Research Assistant</span>
+                </div>
+                <div>
+                    <button class="text-white hover:text-gray-200">
+                        <i class="fas fa-minus"></i>
+                    </button>
+                    <button class="text-white hover:text-gray-200 ml-2">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+            </div>
+            <div class="flex-1 p-3 overflow-y-auto h-96 bg-gray-50">
+                <!-- Chat messages would go here -->
+                <div class="flex flex-col space-y-3">
+                    <div class="flex items-start">
+                        <div class="flex-shrink-0 h-8 w-8 rounded-full bg-blue-100 flex items-center justify-center text-blue-600">
+                            <i class="fas fa-robot text-sm"></i>
+                        </div>
+                        <div class="ml-2 bg-white p-3 rounded-lg shadow-sm max-w-xs">
+                            <p class="text-sm">How can I assist with your quantum computing research today?</p>
+                            <span class="text-xs text-gray-500 mt-1">10:23 AM</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="p-3 border-t">
+                <div class="relative">
+                    <input type="text" placeholder="Type your message..." class="w-full px-3 py-2 rounded-md border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm pr-8">
+                    <button class="absolute right-2 top-2 text-blue-500 hover:text-blue-700">
+                        <i class="fas fa-paper-plane"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Quick Action Button -->
+        <div class="fixed bottom-6 right-6">
+            <button class="bg-scholar-accent hover:bg-blue-700 text-white h-14 w-14 rounded-full shadow-lg flex items-center justify-center">
+                <i class="fas fa-robot text-lg"></i>
+            </button>
+        </div>
+    </div>
+
+    <script src="https://visjs.github.io/vis-network/standalone/umd/vis-network.min.js"></script>
+    <script>
+        // Graph data
+        const nodes = [
+            { id: "Quantum Gates", label: "Quantum Gates", color: "lightblue" },
+            { id: "Neural Networks", label: "Neural Networks", color: "lightgreen" },
+            { id: "Qubits", label: "Qubits", color: "lightpurple" },
+            { id: "Error Correction", label: "Error Correction", color: "lightyellow" },
+            { id: "Superposition", label: "Superposition", color: "lightpink" },
+            { id: "Quantum Computing Advancement", label: "Quantum Computing Advancement", color: "gold", shape: "star" }
+        ];
+
+        const edges = [
+            { from: "Quantum Gates", to: "Quantum Computing Advancement", label: "Gates enable quantum computation", methodology: "theoretical" },
+            { from: "Neural Networks", to: "Quantum Computing Advancement", label: "Networks optimize quantum error correction", methodology: "statistical" },
+            { from: "Qubits", to: "Quantum Computing Advancement", label: "Qubits form computational basis", methodology: "experimental" },
+            { from: "Error Correction", to: "Quantum Computing Advancement", label: "Correction stabilizes quantum states", methodology: "statistical" },
+            { from: "Superposition", to: "Quantum Computing Advancement", label: "Superposition enables parallelism", methodology: "theoretical" }
+        ];
+
+        // Initialize Vis.js network
+        const container = document.getElementById("graph");
+        const data = { nodes: new vis.DataSet(nodes), edges: new vis.DataSet(edges) };
+        const options = {
+            nodes: { shape: "dot", size: 20, font: { size: 14 } },
+            edges: { arrows: "to", font: { size: 12 }, smooth: { type: "curvedCW" } },
+            physics: { enabled: true },
+            layout: { improvedLayout: true }
+        };
+        const network = new vis.Network(container, data, options);
+
+        // Expand functionality
+        function expandGraph() {
+            network.fit({ animation: { duration: 1000, easingFunction: "easeInOutQuad" } });
+        }
+
+        // Filter by methodology
+        function filterGraph(methodology) {
+            const filteredEdges = methodology === "all" ? edges : edges.filter(edge => edge.methodology === methodology);
+            data.edges.clear();
+            data.edges.add(filteredEdges);
+        }
+
+        // Highlight node and edge
+        function highlightNode(nodeId) {
+            network.selectNodes([nodeId]);
+            const connectedEdges = edges.filter(edge => edge.from === nodeId);
+            network.selectEdges(connectedEdges.map(edge => edge.from + "-" + edge.to));
+        }
+    </script>
+    <script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'935465a6de55c00b',t:'MTc0NTQ4NTA4Ny4wMDAwMDA='};var a=document.createElement('script');a.nonce='';a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+</html>
