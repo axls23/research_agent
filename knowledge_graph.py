@@ -15,7 +15,7 @@ from typing import List, Dict, Any
 import re
 from langchain.prompts import PromptTemplate
 from langchain.chains import LLMChain
-
+from paperconstructor. constructors import savechunks
 class ResearchExtractor:
     """Class to extract research topics and goals from the knowledge graph."""
     
@@ -30,7 +30,7 @@ class ResearchExtractor:
         self.semantic_chain = LLMChain(
             llm=self.llm,
             prompt=PromptTemplate(
-                input_variables=knowldege_base.get_chunks,
+                input_variables= savechunks,
                 template= template            )
         )
         template=('''from langchain.prompts import PromptTemplate 
