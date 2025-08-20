@@ -97,5 +97,4 @@ pytest
 5. Create a Pull Request
 
 ## License
-
-MIT License
+[MIT License](https://github.com/axls23/research_agent/blob/main/LICENSE)
