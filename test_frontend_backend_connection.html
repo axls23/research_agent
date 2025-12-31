@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Frontend-Backend Connection Test</title>
+</head>
+<body>
+    <h1>Frontend-Backend Connection Test</h1>
+    <div id="status">Testing connection...</div>
+    <button onclick="testConnection()">Test API Connection</button>
+    <div id="result"></div>
+
+    <script>
+        async function testConnection() {
+            const statusDiv = document.getElementById('status');
+            const resultDiv = document.getElementById('result');
+            
+            try {
+                statusDiv.textContent = 'Testing API connection...';
+                
+                // Test health endpoint
+                const healthResponse = await fetch('http://localhost:8000/health');
+                const healthData = await healthResponse.json();
+                
+                statusDiv.textContent = 'Health check passed! Testing project creation...';
+                
+                // Test project creation
+                const projectResponse = await fetch('http://localhost:8000/api/research/create', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        project_name: 'Test Project',
+                        description: 'Testing frontend-backend connection',
+                        task_type: 'literature_review'
+                    })
+                });
+                
+                const projectData = await projectResponse.json();
+                
+                statusDiv.textContent = '✅ Connection successful!';
+                resultDiv.innerHTML = `
+                    <h3>Test Results:</h3>
+                    <p><strong>Health Check:</strong> ${healthData.status}</p>
+                    <p><strong>Project Created:</strong> ${projectData.project_id}</p>
+                    <p><strong>Status:</strong> ${projectData.status}</p>
+                `;
+                
+            } catch (error) {
+                statusDiv.textContent = '❌ Connection failed!';
+                resultDiv.innerHTML = `
+                    <h3>Error:</h3>
+                    <p>${error.message}</p>
+                    <p>Make sure both servers are running:</p>
+                    <ul>
+                        <li>Backend API: http://localhost:8000</li>
+                        <li>Frontend: http://localhost:8080</li>
+                    </ul>
+                `;
+            }
+        }
+        
+        // Auto-test on page load
+        window.onload = testConnection;
+    </script>
+</body>
+</html>

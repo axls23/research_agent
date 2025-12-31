@@ -1,0 +1,183 @@
+# Research Agent System Configuration
+# Phase 1: Core Infrastructure
+# Updated: October 29, 2025
+
+# ===== System Configuration =====
+system:
+  name: "Research Agent System"
+  version: "0.2.0-phase1"
+  mode: "development"  # development | production
+  debug: true
+
+# ===== LLM Configuration =====
+llm:
+  provider: "google"  # google | openai | anthropic | groq
+  model: "gemini-2.0-flash-exp"
+  temperature: 0.7
+  max_tokens: 8192
+  timeout: 120
+  
+  # Fallback models
+  fallback_models:
+    - "gemini-1.5-pro"
+    - "gpt-4o"
+    - "llama-3.1-8b-instruct"
+  
+  # Groq Configuration
+  groq_enabled: true
+  groq_api_key: null  # Set via GROQ_API_KEY environment variable
+  groq_default_model: "llama-3.1-8b-instant"
+  groq_models:
+    - "meta-llama/llama-4-scout-17b-16e-instruct"
+    - "llama-3.1-8b-instant"
+    - "groq/compound"
+    - "qwen/qwen3-32b"
+    - "moonshotai/kimi-k2-instruct-0905"
+    - "meta-llama/llama-4-maverick-17b-128e-instruct"
+    - "meta-llama/llama-guard-4-12b"
+    - "groq/compound-mini"
+
+# ===== Agent Configuration =====
+agents:
+  # Enable/disable specific agents
+  enabled:
+    - "literature_review"
+    - "data_processing"
+    - "analysis"
+    - "writing_assistant"
+    - "knowledge_graph"
+    - "collaboration"
+  
+  # Agent-specific settings
+  literature_review:
+    max_papers: 50
+    embedding_model: "all-MiniLM-L6-v2"
+    
+  data_processing:
+    chunk_size: 1000
+    chunk_overlap: 200
+    
+  analysis:
+    statistical_methods: ["descriptive", "inferential", "ml"]
+    
+  writing_assistant:
+    style: "academic"
+    citation_format: "apa"
+    
+  knowledge_graph:
+    backend: "networkx"  # networkx | neo4j
+    auto_update: true
+    
+  collaboration:
+    max_team_size: 10
+    real_time_sync: false
+
+# ===== Workflow Configuration =====
+workflow:
+  # Orchestration patterns
+  patterns:
+    - "sequential"
+    - "parallel"
+    - "loop"
+    - "conditional"
+  
+  # Execution settings
+  execution:
+    max_parallel_agents: 3
+    timeout_seconds: 300
+    retry_attempts: 3
+    retry_delay_seconds: 5
+    
+  # Error handling
+  error_handling:
+    strategy: "graceful_degradation"  # fail_fast | graceful_degradation | retry
+    log_errors: true
+    notify_on_failure: false
+
+# ===== Context Management =====
+context:
+  # Session configuration
+  session:
+    backend: "memory"  # memory | redis | sqlite
+    ttl_seconds: 3600
+    max_history_length: 100
+    
+  # Shared memory
+  shared_memory:
+    enabled: true
+    scope: "team"  # agent | team | global
+
+# ===== Storage Configuration =====
+storage:
+  # Local paths
+  data_dir: "./data"
+  chunks_dir: "./data/chunks"
+  knowledge_graph_dir: "./data/knowledge_graph"
+  cache_dir: "./data/cache"
+  logs_dir: "./logs"
+  
+  # Cache settings
+  cache:
+    enabled: true
+    ttl_seconds: 86400  # 24 hours
+    max_size_mb: 1000
+
+# ===== Logging Configuration =====
+logging:
+  level: "INFO"  # DEBUG | INFO | WARNING | ERROR | CRITICAL
+  format: "json"  # json | text
+  output:
+    - "console"
+    - "file"
+  file:
+    path: "./logs/research_agent.log"
+    rotation: "1 day"
+    retention: "30 days"
+    compression: "gz"
+
+# ===== Cloud Configuration (Optional) =====
+cloud:
+  enabled: false
+  
+  # Google Cloud Platform
+  gcp:
+    project_id: null
+    region: "us-central1"
+    vertex_ai:
+      enabled: false
+      location: "us-central1"
+    cloud_run:
+      enabled: false
+      region: "us-central1"
+
+# ===== Feature Flags =====
+features:
+  knowledge_graph: true
+  real_time_collaboration: false
+  cloud_agents: false
+  advanced_analytics: true
+  auto_evaluation: true
+  polymathic_suggestions: true
+
+# ===== Security =====
+security:
+  api_key_rotation: false
+  encrypt_storage: false
+  audit_logging: true
+
+# ===== Polymathic Features (Phase 1 Foundation) =====
+polymathic:
+  # Interdisciplinary exploration
+  cross_domain_suggestions:
+    enabled: true
+    max_suggestions: 5
+    
+  # Knowledge graph connections
+  cross_field_linking:
+    enabled: true
+    min_similarity: 0.6
+    
+  # Curiosity-driven features
+  exploration_mode:
+    enabled: false  # Will be enabled in later phases
+    randomness: 0.2

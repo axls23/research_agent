@@ -1,0 +1,13 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"path": "../../../Downloads/phase1"
+		}
+	],
+	"settings": {
+		"liveServer.settings.multiRootWorkspaceName": "research_agent"
+	}
+}
