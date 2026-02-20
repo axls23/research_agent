@@ -1,12 +1,14 @@
-from .orchestrator import ResearchWorkflowOrchestrator
+from .base_agent import ResearchAgent
 from .workflow import Workflow, Task
 from .context import Context
 from .registry import AgentRegistry
+from .orchestrator import ResearchWorkflowOrchestrator
 
 __all__ = [
-    'ResearchWorkflowOrchestrator',
+    'ResearchAgent',
     'Workflow',
     'Task',
     'Context',
-    'AgentRegistry'
+    'AgentRegistry',
+    'ResearchWorkflowOrchestrator',
 ] 

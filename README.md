@@ -1,6 +1,31 @@
 # Research Agent System
 
-A sophisticated research workflow orchestration system built on Google's Agent Development Kit (ADK).
+An AI-powered academic research assistant that uses a **multi-agent
+architecture** to help researchers reduce information overload.
+
+## Why Multi-Agent?
+
+Academic research spans distinct phases — literature discovery, data
+processing, analysis, writing, and knowledge management.  A multi-agent
+design maps each phase to a **dedicated, independently testable agent**
+coordinated by a lightweight orchestrator:
+
+| Agent | Responsibility |
+|---|---|
+| **LiteratureReviewAgent** | Search-query formulation, paper retrieval & relevance filtering |
+| **DataProcessingAgent** | Document ingestion, text extraction, chunking |
+| **AnalysisAgent** | Exploratory data analysis, statistical testing, visualization |
+| **WritingAssistantAgent** | Literature synthesis, results summarization, outline generation |
+| **KnowledgeGraphAgent** | Knowledge-graph creation, entity extraction, cross-paper querying |
+| **CollaborationAgent** | Task delegation, progress tracking, shared context |
+
+Benefits:
+- **Separation of concerns** – each agent has a small, focused prompt context
+- **Composable workflows** – the orchestrator chains agents into configurable
+  research pipelines (e.g. *literature review → knowledge extraction → synthesis*)
+- **Independent testing** – every agent is unit-testable in isolation (60 tests)
+- **Extensibility** – new agents or workflows can be added without touching
+  existing ones
 
 ## Project Structure
 
@@ -14,9 +39,10 @@ research_agent/
 │   ├── knowledge_graph_agent.py
 │   └── collaboration_agent.py
 ├── core/                      # Core system components
-│   ├── orchestrator.py        # Main workflow orchestrator
-│   ├── workflow.py           # Workflow definitions
-│   ├── context.py            # Context management
+│   ├── base_agent.py         # ResearchAgent base class
+│   ├── orchestrator.py       # Multi-agent workflow orchestrator
+│   ├── workflow.py           # Workflow & Task definitions
+│   ├── context.py            # Execution context
 │   └── registry.py           # Agent registry
 ├── utils/                     # Utility functions
 │   ├── logger.py             # Logging configuration
@@ -25,7 +51,7 @@ research_agent/
 ├── data/                      # Data storage
 │   ├── chunks/               # Research paper chunks
 │   └── knowledge_graph/      # Knowledge graph data
-├── tests/                     # Test suite
+├── tests/                     # Test suite (60 tests)
 │   ├── agents/
 │   ├── core/
 │   └── utils/
@@ -51,10 +77,10 @@ pip install -e .
 ## Usage
 
 ```python
-from research_agent.core import ResearchWorkflowOrchestrator
+from core.orchestrator import ResearchWorkflowOrchestrator
 
-# Initialize orchestrator
-orchestrator = ResearchWorkflowOrchestrator(researcher_preferences)
+# Initialize orchestrator with researcher preferences
+orchestrator = ResearchWorkflowOrchestrator({"citation_format": "apa"})
 
 # Start a research project
 project_id = await orchestrator.start_research_project(
@@ -62,12 +88,16 @@ project_id = await orchestrator.start_research_project(
     "Analysis of recent AI developments"
 )
 
-# Start a workflow
+# Start a workflow pipeline
 workflow_id = await orchestrator.start_research_workflow(
     project_id,
     "literature_review",
     custom_parameters={"focus_area": "machine_learning"}
 )
+
+# Check progress and get suggestions
+progress = await orchestrator.get_research_progress(project_id)
+next_steps = await orchestrator.suggest_next_steps(project_id)
 ```
 
 ## Development

@@ -1,12 +1,16 @@
-from google.adk.agents import Agent
 from typing import Dict, Any, Optional
 import logging
 
-class ResearchAgent(Agent):
-    """Base class for all research agents in the system."""
-    
+
+class ResearchAgent:
+    """Base class for all research agents in the system.
+
+    Provides a common interface for initialisation, input validation,
+    processing, and cleanup that every specialised agent inherits.
+    """
+
     def __init__(self, name: str, description: str):
-        super().__init__(name)
+        self.name = name
         self.description = description
         self.logger = logging.getLogger(f"research_agent.{name}")
         self.context: Optional[Dict[str, Any]] = None
