@@ -1,13 +1,9 @@
-from langchain.text_splitter import RecursiveCharacterTextSplitter
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
-from langchain_community.tools import arxiv
-from langchain_ollama.embeddings import OllamaEmbeddings
-from langchain.chat_models import init_chat_model
 import os
 import json
 import glob
-from tavily import TavilyClient
+import logging
 import numpy as np
 from gensim.models import Word2Vec
 from gensim.utils import simple_preprocess
@@ -15,45 +11,40 @@ from typing import List, Dict, Any
 import re
 from langchain.prompts import PromptTemplate
 from langchain.chains import LLMChain
-from paperconstructor. constructors import savechunks
 class ResearchExtractor:
     """Class to extract research topics and goals from the knowledge graph."""
-    
-    def __init__(self, qdrant_client: QdrantClient, collection_name: str, llm):
+
+    SEMANTIC_TEMPLATE = (
+        "Analyze the following research paper text and extract key topics "
+        "and research goals for a knowledge graph:\n\n"
+        "Research Text:\n{text}\n\n"
+        "Provide only two lists in your response:\n\n"
+        "1. A list of main research topics (subjects, concepts, specialized terminology)\n"
+        "2. A list of objective research goals (starting with action verbs)\n\n"
+        "Format:\n"
+        "Topics:\n- [Topic 1]\n- [Topic 2]\n...\n\n"
+        "Goals:\n- [Goal 1]\n- [Goal 2]\n..."
+    )
+
+    def __init__(self, qdrant_client: QdrantClient, collection_name: str, llm=None):
         self.qdrant_client = qdrant_client
         self.collection_name = collection_name
-        self.llm=llm
+        self.llm = llm
+        self.logger = logging.getLogger(__name__)
         self.topic_keywords = ["research", "study", "investigate", "examine", "analyze", "explore"]
         self.goal_keywords = ["aim", "objective", "purpose", "goal", "intention", "target"]
-         
-        # Initialize LLM chain for semantic analysis
-        self.semantic_chain = LLMChain(
-            llm=self.llm,
-            prompt=PromptTemplate(
-                input_variables= savechunks,
-                template= template            )
-        )
-        template=('''from langchain.prompts import PromptTemplate 
-        Analyze the following research paper text and extract key topics and research goals for a knowledge graph:
 
-        Research Text:
-        {self.dataset}
-
-        Provide only two lists in your response:
-
-        1. A list of main research topics (subjects, concepts, specialized terminology)
-        2. A list of objective research goals (starting with action verbs)
-
-        Format:
-        Topics:
-        - [Topic 1]
-        - [Topic 2]
-        ...
-
-        Goals:
-        - [Goal 1]
-        - [Goal 2]
-        ...''')
+        # Initialize LLM chain for semantic analysis when llm is provided
+        if self.llm is not None:
+            self.semantic_chain = LLMChain(
+                llm=self.llm,
+                prompt=PromptTemplate(
+                    input_variables=["text"],
+                    template=self.SEMANTIC_TEMPLATE,
+                ),
+            )
+        else:
+            self.semantic_chain = None
 
 
 
@@ -160,37 +151,17 @@ class ResearchExtractor:
             return np.mean(vectors, axis=0).tolist()
         return [0.0] * 100  # Return zero vector if no tokens found
 
-# Initialize Qdrant client and collection
-apikey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2Nlc3MiOiJtIn0.GF3HNT8RlmH4b5x2xAQxIvzzBXRXIJDVrYJqCo0nIDk'
-qdrant_client = QdrantClient(
-    url="https://db19c5fd-26bb-4c9a-8693-c99936abc5f1.us-east4-0.gcp.cloud.qdrant.io:6333",
-    api_key=apikey
-)
-if not os.environ.get("GROQ_API_KEY"):
-        os.environ["GROQ_API_KEY"] = getpass.getpass("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 ")
+def load_chunks_from_jsonl(chunks_dir: str = "chunks") -> List[Dict[str, Any]]:
+    """Load chunks from JSONL files.
 
-    
-
-collection_name = "research_assistant"
-qdrant_client.recreate_collection(
-    collection_name=collection_name,
-    vectors_config=models.VectorParams(size=100, distance=models.Distance.COSINE)
-)
-
-# Initialize research extractor
-research_extractor = ResearchExtractor(qdrant_client, collection_name)
-
-# Example usage:
-# results = research_extractor.extract_topics_and_goals("machine learning research")
-# print("Topics:", results["topics"])
-# print("Goals:", results["goals"])
-
-# Step 2: Load chunks from JSONL files
-def load_chunks_from_jsonl():
+    :param chunks_dir: Directory containing chunk JSONL files
+    :type chunks_dir: str
+    :return: List of chunk dictionaries
+    :rtype: List[Dict[str, Any]]
+    """
     chunks = []
-    # Only process files ending with -chunks.jsonl
-    chunk_files = glob.glob("chunks/*-chunks.jsonl")
-    
+    chunk_files = glob.glob(os.path.join(chunks_dir, "*-chunks.jsonl"))
+
     for file_path in chunk_files:
         with open(file_path, 'r', encoding='utf-8') as f:
             for line in f:
@@ -198,52 +169,90 @@ def load_chunks_from_jsonl():
                 chunks.append(chunk)
     return chunks
 
-# Load all chunks
-chunks = load_chunks_from_jsonl()
-print(f"Loaded {len(chunks)} chunks from JSONL files")
 
-# Step 3: Prepare text for Word2Vec
-sentences = []
-for chunk in chunks:
-    # Tokenize the text using simple_preprocess
-    tokens = simple_preprocess(chunk['chunk'])  # Using the 'chunk' key
-    sentences.append(tokens)
+def build_word2vec_model(chunks: List[Dict[str, Any]], vector_size: int = 100) -> Word2Vec:
+    """Train a Word2Vec model on chunk texts.
 
-# Train Word2Vec model
-word2vec_model = Word2Vec(sentences, vector_size=100, window=5, min_count=1, workers=4)
+    :param chunks: List of chunk dictionaries with a 'chunk' key
+    :param vector_size: Dimensionality of the word vectors
+    :return: Trained Word2Vec model
+    """
+    sentences = [simple_preprocess(chunk['chunk']) for chunk in chunks]
+    return Word2Vec(sentences, vector_size=vector_size, window=5, min_count=1, workers=4)
 
-# Step 4: Create embeddings and store in Qdrant
-points = []
-for i, chunk in enumerate(chunks):
-    # Get tokens for the chunk
-    tokens = simple_preprocess(chunk['chunk'])  # Using the 'chunk' key
-    
-    # Calculate average vector for all words in the chunk
-    vectors = [word2vec_model.wv[word] for word in tokens if word in word2vec_model.wv]
-    if vectors:
-        embedding = np.mean(vectors, axis=0).tolist()
-        
-        points.append(
-            models.PointStruct(
-                id=i,
-                vector=embedding,
-                payload={
-                    "text": chunk['chunk'],
-                    "source": chunk.get('source', 'unknown'),
-                    "metadata": {
-                        "doi": chunk.get('doi', ''),
-                        "chunk_id": chunk.get('chunk-id', ''),
-                        "title": chunk.get('title', '')
+
+def create_qdrant_points(chunks: List[Dict[str, Any]], word2vec_model: Word2Vec) -> List[models.PointStruct]:
+    """Create Qdrant point structs from chunks using Word2Vec embeddings.
+
+    :param chunks: List of chunk dictionaries
+    :param word2vec_model: Trained Word2Vec model
+    :return: List of PointStruct objects ready for upload
+    """
+    points = []
+    for i, chunk in enumerate(chunks):
+        tokens = simple_preprocess(chunk['chunk'])
+        vectors = [word2vec_model.wv[word] for word in tokens if word in word2vec_model.wv]
+        if vectors:
+            embedding = np.mean(vectors, axis=0).tolist()
+            points.append(
+                models.PointStruct(
+                    id=i,
+                    vector=embedding,
+                    payload={
+                        "text": chunk['chunk'],
+                        "source": chunk.get('source', 'unknown'),
+                        "metadata": {
+                            "doi": chunk.get('doi', ''),
+                            "chunk_id": chunk.get('chunk-id', ''),
+                            "title": chunk.get('title', '')
+                        }
                     }
-                }
+                )
             )
-        )
+    return points
 
-# Upload to Qdrant
-batch_size = 100
-for i in range(0, len(points), batch_size):
-    batch = points[i:i + batch_size]
-    qdrant_client.upsert(collection_name=collection_name, points=batch)
-    print(f"Uploaded batch {i//batch_size + 1}/{(len(points) + batch_size - 1)//batch_size}")
 
-print(f"Successfully stored {len(points)} chunks in Qdrant collection '{collection_name}'.")
+def upload_points_to_qdrant(
+    qdrant_client: QdrantClient,
+    collection_name: str,
+    points: List[models.PointStruct],
+    batch_size: int = 100,
+) -> int:
+    """Upload point structs to a Qdrant collection in batches.
+
+    :param qdrant_client: Initialised QdrantClient instance
+    :param collection_name: Name of the target collection
+    :param points: Points to upload
+    :param batch_size: Number of points per upload batch
+    :return: Number of points uploaded
+    """
+    for i in range(0, len(points), batch_size):
+        batch = points[i:i + batch_size]
+        qdrant_client.upsert(collection_name=collection_name, points=batch)
+    return len(points)
+
+
+def initialize_knowledge_graph(
+    qdrant_url: str | None = None,
+    qdrant_api_key: str | None = None,
+    collection_name: str = "research_assistant",
+    vector_size: int = 100,
+) -> tuple:
+    """Initialize the Qdrant-backed knowledge graph.
+
+    Reads credentials from environment variables when not supplied explicitly:
+      - ``QDRANT_URL``
+      - ``QDRANT_API_KEY``
+
+    :return: Tuple of (QdrantClient, collection_name, ResearchExtractor)
+    """
+    url = qdrant_url or os.environ.get("QDRANT_URL", "http://localhost:6333")
+    api_key = qdrant_api_key or os.environ.get("QDRANT_API_KEY")
+
+    client = QdrantClient(url=url, api_key=api_key)
+    client.recreate_collection(
+        collection_name=collection_name,
+        vectors_config=models.VectorParams(size=vector_size, distance=models.Distance.COSINE),
+    )
+    extractor = ResearchExtractor(client, collection_name)
+    return client, collection_name, extractor

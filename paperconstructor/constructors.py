@@ -88,7 +88,7 @@ def init_extractor(
     # instantiate the model
 
     if not os.environ.get("GROQ_API_KEY"):
-        os.environ["GROQ_API_KEY"] = getpass.getpass("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 ")
+        os.environ["GROQ_API_KEY"] = getpass.getpass("Enter GROQ_API_KEY: ")
 
     
 
