@@ -7,7 +7,7 @@ from typing import Dict, Any, List
 
 class AnalysisAgent(ResearchAgent):
     """Agent responsible for exploratory analysis, statistical testing,
-    and visualisation of research data.
+    and visualization of research data.
 
     Supported actions:
       - ``explore_data``          – run exploratory data analysis
@@ -19,7 +19,7 @@ class AnalysisAgent(ResearchAgent):
         super().__init__(
             name="analysis",
             description=(
-                "Analyses research data using statistical and qualitative "
+                "Analyzes research data using statistical and qualitative "
                 "methods to uncover patterns and reduce manual effort"
             ),
         )
@@ -55,7 +55,7 @@ class AnalysisAgent(ResearchAgent):
         return {"status": "completed", "results": {}, "methods": preferred_methods}
 
     async def _create_visualizations(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        """Generate visualisations from analysis results."""
+        """Generate visualizations from analysis results."""
         results = data.get("results", {})
         self.logger.info("Creating visualizations")
         # TODO: implement visualisation generation

@@ -220,7 +220,7 @@ def upload_points_to_qdrant(
 ) -> int:
     """Upload point structs to a Qdrant collection in batches.
 
-    :param qdrant_client: Initialised QdrantClient instance
+    :param qdrant_client: Initialized QdrantClient instance
     :param collection_name: Name of the target collection
     :param points: Points to upload
     :param batch_size: Number of points per upload batch
