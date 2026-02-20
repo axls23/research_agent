@@ -249,6 +249,7 @@ class TestWorkflowTemplates:
         orch = ResearchWorkflowOrchestrator(prefs)
         wf = orch._customize_workflow(orch.workflow_templates["data_analysis"])
         stat_task = next(
-            t for t in wf.tasks if t.name == "statistical_testing"
+            (t for t in wf.tasks if t.name == "statistical_testing"), None
         )
+        assert stat_task is not None, "statistical_testing task not found"
         assert stat_task.parameters["preferred_methods"] == ["t-test", "anova"]

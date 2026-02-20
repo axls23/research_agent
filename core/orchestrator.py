@@ -171,7 +171,7 @@ class ResearchWorkflowOrchestrator:
             raise ValueError(f"Unknown workflow type: {workflow_type}")
 
         project = self.active_research_projects[project_id]
-        self._customize_workflow(
+        workflow_instance = self._customize_workflow(
             self.workflow_templates[workflow_type], custom_parameters
         )
         instance_id = (
@@ -190,6 +190,7 @@ class ResearchWorkflowOrchestrator:
             "status": "started",
             "started_at": time.time(),
             "context": context,
+            "workflow": workflow_instance,
         }
         return instance_id
 
