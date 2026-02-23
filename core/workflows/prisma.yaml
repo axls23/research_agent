@@ -1,0 +1,33 @@
+name: prisma_2020
+description: "PRISMA 2020 Systematic Review — full validation gates"
+
+required_steps:
+  - literature_review
+  - data_processing
+  - quality_assessment
+  - knowledge_graph
+  - analysis
+  - writing
+  - audit_formatting
+
+validation:
+  search_coverage:
+    min_databases: 3
+    require_search_log: true
+    require_date_range: true
+    min_papers_found: 10
+
+  extraction:
+    min_extraction_rate: 0.8
+    min_quality_score: 0.6
+    require_dual_extraction: false
+
+  analysis:
+    require_methods:
+      - descriptive
+
+reporting:
+  prisma_flow_diagram: true
+  methods_section: true
+  audit_export: true
+  prisma_checklist: true

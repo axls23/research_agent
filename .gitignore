@@ -10,3 +10,16 @@ build/
 temp.pdf
 logs/
 outputs/
+
+# Downloaded papers (large PDFs)
+papers/
+
+# Generated visualizations
+qdrant_semantic_map.html
+
+# Test output artifacts
+test_out.txt
+test_output.txt
+
+# Generated data
+chunks/

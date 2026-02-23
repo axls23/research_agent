@@ -1,0 +1,36 @@
+name: cochrane
+description: "Cochrane Handbook — rigorous systematic review conduct"
+
+required_steps:
+  - literature_review
+  - data_processing
+  - quality_assessment
+  - knowledge_graph
+  - analysis
+  - writing
+  - audit_formatting
+
+validation:
+  search_coverage:
+    min_databases: 4
+    require_search_log: true
+    require_date_range: true
+    require_grey_literature: true
+    min_papers_found: 20
+
+  extraction:
+    min_extraction_rate: 0.9
+    min_quality_score: 0.7
+    require_dual_extraction: true
+
+  analysis:
+    require_methods:
+      - descriptive
+      - risk_of_bias
+
+reporting:
+  prisma_flow_diagram: true
+  methods_section: true
+  audit_export: true
+  prisma_checklist: true
+  cochrane_rob_table: true

@@ -1,14 +1,18 @@
-from .base_agent import ResearchAgent
-from .workflow import Workflow, Task
-from .context import Context
-from .registry import AgentRegistry
-from .orchestrator import ResearchWorkflowOrchestrator
+"""
+core — research agent core components.
 
-__all__ = [
-    'ResearchAgent',
-    'Workflow',
-    'Task',
-    'Context',
-    'AgentRegistry',
-    'ResearchWorkflowOrchestrator',
-] 
+Provides:
+- ResearchAgent base class
+- Orchestrator (legacy workflow API)
+- LangGraph pipeline (graph.py)
+- State management
+- LLM providers
+"""
+from core.base_agent import ResearchAgent
+from core.orchestrator import (
+    ResearchWorkflowOrchestrator,
+    Task,
+    Workflow,
+    Context,
+    AgentRegistry,
+)

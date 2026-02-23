@@ -54,3 +54,13 @@ tqdm>=4.66.0
 
 # Note: Install with: pip install -r requirements-phase1.txt
 # For development: pip install -r requirements-phase1.txt -e .
+
+langgraph
+mistralai
+langchain-groq
+
+neo4j
+qdrant-client
+sentence-transformers
+pdf2image
+Pillow

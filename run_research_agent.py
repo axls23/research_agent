@@ -10,82 +10,82 @@ import os
 import sys
 import asyncio
 import logging
+import argparse
 from pathlib import Path
-import webbrowser
-import uvicorn
-from multiprocessing import Process
-import time
 
 # Add project to Python path
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
-from research_agent.utils.logger import setup_logging
-from research_agent.utils.config import config
-from research_agent.api.server import app
+from dotenv import load_dotenv
+load_dotenv()
 
-# Setup logging
-logger = setup_logging()
+# Setup basic logging locally since research_agent/utils/logger was removed
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+logger = logging.getLogger("run_research_agent")
 
+from core.graph import run_research_pipeline
 
 def check_requirements():
     """Check if all requirements are met"""
-    required_env_vars = [
-        "OPENAI_API_KEY",  # For paperconstructor
-    ]
-    
-    missing = []
-    for var in required_env_vars:
-        if not os.getenv(var):
-            missing.append(var)
-    
-    if missing:
-        logger.error(f"Missing required environment variables: {missing}")
-        logger.info("Please set the following environment variables:")
-        for var in missing:
-            logger.info(f"  - {var}")
-        return False
-    
+    # Just check if at least one LLM key is set, though Groq is primary
+    if not os.getenv("GROQ_API_KEY") and not os.getenv("MISTRAL_API_KEY") and not os.getenv("OPENAI_API_KEY"):
+        logger.warning("No API keys found (GROQ_API_KEY, MISTRAL_API_KEY, OPENAI_API_KEY). Operations requiring an LLM may fail.")
     return True
 
-
-def start_api_server():
-    """Start the FastAPI server"""
-    logger.info("Starting Research Agent API server...")
+async def main_async(args):
+    """Async execution of the pipeline"""
+    logger.info(f"Using Mode: {args.mode}")
+    logger.info(f"Using Rigor Level: {args.rigor}")
     
-    # Configure server
-    host = config.get("api_host", "0.0.0.0")
-    port = config.get("api_port", 8000)
+    # In a real use case, these would be passed via CLI args as well, 
+    # but for a simple demo test, we can use placeholder topics.
+    project_name = "LangGraph Integration Test"
+    topic = "The impact of Multi-Agent Architectures on Academic Research"
+    goals = [
+        "Identify core architectures used in literature",
+        "Evaluate the reduction in information overload"
+    ]
     
-    # Run server
-    uvicorn.run(
-        "research_agent.api.server:app",
-        host=host,
-        port=port,
-        reload=True,
-        log_level="info"
-    )
-
-
-def open_frontend():
-    """Open the frontend in default browser"""
-    time.sleep(3)  # Wait for server to start
+    logger.info(f"Running research pipeline on: '{topic}'")
     
-    frontend_path = project_root / "frontend" / "index.html"
-    if frontend_path.exists():
-        logger.info(f"Opening frontend: {frontend_path}")
-        webbrowser.open(f"file:///{frontend_path}")
-    else:
-        logger.error(f"Frontend not found at {frontend_path}")
-
+    try:
+        result_state = await run_research_pipeline(
+            project_name=project_name,
+            research_topic=topic,
+            research_goals=goals,
+            rigor_level=args.rigor,
+            interactive=False  # Set to False so it doesn't wait indefinitely in tests
+        )
+        
+        logger.info("[SUCCESS] Research Pipeline Completed!")
+        
+        if "audit_export_path" in result_state:
+            logger.info(f"Audit exported to: {result_state['audit_export_path']}")
+            
+    except Exception as e:
+        logger.error(f"Pipeline failed: {e}", exc_info=True)
+        sys.exit(1)
 
 def main():
     """Main entry point"""
-    print("""
-    ╔═══════════════════════════════════════╗
-    ║       Research Agent System           ║
-    ║   AI-Powered Research Assistant       ║
-    ╚═══════════════════════════════════════╝
+    parser = argparse.ArgumentParser(description="Run the Research Agent System")
+    parser.add_argument("--mode", type=str, choices=["default", "langgraph"], default="langgraph",
+                        help="Execution mode (default or langgraph).")
+    parser.add_argument("--rigor", type=str, choices=["exploratory", "prisma", "cochrane"], default="prisma",
+                        help="Methodological rigor (exploratory, prisma, cochrane).")
+    args = parser.parse_args()
+    
+    # Expose to other components via environment variables
+    os.environ["RESEARCH_AGENT_MODE"] = args.mode
+    os.environ["RESEARCH_AGENT_RIGOR"] = args.rigor
+
+    print(f"""
+    =======================================
+    |       Research Agent System         |
+    |   AI-Powered Research Assistant     |
+    =======================================
+    Mode: {args.mode} | Rigor: {args.rigor}
     """)
     
     # Check requirements
@@ -96,32 +96,10 @@ def main():
     os.makedirs("outputs", exist_ok=True)
     os.makedirs("logs", exist_ok=True)
     
-    try:
-        # Start API server in separate process
-        api_process = Process(target=start_api_server)
-        api_process.start()
-        
-        # Open frontend
-        open_frontend()
-        
-        logger.info("Research Agent system is running!")
-        logger.info("API Server: http://localhost:8000")
-        logger.info("API Docs: http://localhost:8000/docs")
-        logger.info("\nPress Ctrl+C to stop the server\n")
-        
-        # Keep main process running
-        api_process.join()
-        
-    except KeyboardInterrupt:
-        logger.info("\nShutting down Research Agent system...")
-        if api_process.is_alive():
-            api_process.terminate()
-            api_process.join()
-        logger.info("Goodbye!")
-    except Exception as e:
-        logger.error(f"Error running Research Agent: {e}")
-        sys.exit(1)
-
+    if args.mode == "langgraph":
+        asyncio.run(main_async(args))
+    else:
+        logger.info("Default mode selected, but API server is not available. Try --mode langgraph")
 
 if __name__ == "__main__":
     main()

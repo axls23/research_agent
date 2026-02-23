@@ -1,0 +1,17 @@
+name: exploratory
+description: "Exploratory / rapid literature scan — no validation gates"
+
+required_steps:
+  - literature_review
+  - data_processing
+  - knowledge_graph
+  - analysis
+  - writing
+
+validation: {}
+# No validation criteria — all gates auto-pass
+
+reporting:
+  prisma_flow_diagram: false
+  methods_section: false
+  audit_export: true
