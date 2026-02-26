@@ -29,7 +29,8 @@ async def literature_review_node(
     4. Appends audit entries
     """
     config = config or {}
-    llm = config.get("configurable", {}).get("llm")
+    cfgr = config.get("configurable", {})
+    llm = cfgr.get("llm_fast") or cfgr.get("llm")  # prefer fast tier
 
     topic = state["research_topic"]
     goals = state.get("research_goals", [])
@@ -84,7 +85,15 @@ async def literature_review_node(
         action="multi_database_search",
         inputs={"queries": queries, "databases": databases},
         output_summary=f"Found {len(unique_papers)} papers across {list(all_dbs_searched)}",
-        provenance={"paper_ids": [p["paper_id"] for p in unique_papers[:20]]},
+        provenance={
+            "model_tier": "fast",
+            "model": getattr(llm, "model", "unknown") if llm else None,
+            "query_formulation": "llm" if llm else "fallback",
+            "raw_hits": len(all_papers),
+            "after_dedup": len(unique_papers),
+            "databases_searched": list(all_dbs_searched),
+            "paper_ids": [p["paper_id"] for p in unique_papers[:20]],
+        },
     )
 
     return {

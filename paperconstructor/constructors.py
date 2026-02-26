@@ -2,7 +2,7 @@ import os
 import re
 import getpass
 import arxiv
-import PyPDF2 
+import PyPDF2
 import json
 import requests
 from requests.adapters import HTTPAdapter, Retry
@@ -13,15 +13,17 @@ import tiktoken
 from langchain.chat_models import init_chat_model
 from tqdm.auto import tqdm
 import logging
-#from utility import logger
+
+# from utility import logger
 from typing import Union, Optional
 
 # Initialize the logger
 logging.basicConfig(level=logging.INFO)
-logger= logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 
-paper_id_re = re.compile(r'https://arxiv.org/abs/(\d+\.\d+)')
+paper_id_re = re.compile(r"https://arxiv.org/abs/(\d+\.\d+)")
+
 
 def retry_request_session(retries: Optional[int] = 5):
     # we setup retry strategy to retry on common errors
@@ -33,13 +35,14 @@ def retry_request_session(retries: Optional[int] = 5):
             500,  # internal server error
             502,  # bad gateway
             503,  # service unavailable
-            504   # gateway timeout
-        ]
+            504,  # gateway timeout
+        ],
     )
     # we setup a session with the retry strategy
     session = requests.Session()
-    session.mount('https://', HTTPAdapter(max_retries=retries))
+    session.mount("https://", HTTPAdapter(max_retries=retries))
     return session
+
 
 def get_paper_id(query: str, handle_not_found: bool = True):
     """Get the paper ID from a query.
@@ -52,12 +55,7 @@ def get_paper_id(query: str, handle_not_found: bool = True):
     :return: The paper ID
     :rtype: str
     """
-    special_chars = {
-        ":": "%3A",
-        "|": "%7C",
-        ",": "%2C",
-        " ": "+"
-    }
+    special_chars = {":": "%3A", "|": "%7C", ",": "%2C", " ": "+"}
     # create a translation table from the special_chars dictionary
     translation_table = query.maketrans(special_chars)
     # use the translate method to replace the special characters
@@ -65,7 +63,9 @@ def get_paper_id(query: str, handle_not_found: bool = True):
     # init requests search session
     session = retry_request_session()
     # get the search results
-    res = session.get(f"https://www.google.com/search?q={search_term}&sclient=gws-wiz-serp")
+    res = session.get(
+        f"https://www.google.com/search?q={search_term}&sclient=gws-wiz-serp"
+    )
     try:
         # extract the paper id
         paper_id = paper_id_re.findall(res.text)[0]
@@ -75,60 +75,53 @@ def get_paper_id(query: str, handle_not_found: bool = True):
             return None
         else:
             # if no paper is found, raise an error
-            raise Exception(f'No paper found for query: {query}')
+            raise Exception(f"No paper found for query: {query}")
     return paper_id
+
 
 def init_extractor(
     template: str,
     gemini_key: Union[str, None] = None,
     max_tokens: int = 1000,
     chunk_size: int = 300,
-    chunk_overlap: int = 40
+    chunk_overlap: int = 40,
 ):
     # instantiate the model
 
     if not os.environ.get("GROQ_API_KEY"):
         os.environ["GROQ_API_KEY"] = getpass.getpass("Enter GROQ_API_KEY: ")
 
-    
-
-    llm= init_chat_model("deepseek-r1:1.5b", model_provider="groq")
+    llm = init_chat_model("deepseek-r1:1.5b", model_provider="groq")
     # initialize prompt template
-    prompt = PromptTemplate(
-        template=template,
-        input_variables=['refs']
-    )
+    prompt = PromptTemplate(template=template, input_variables=["refs"])
     # instantiate the LLMChain extractor model
-    extractor = LLMChain(
-        prompt=prompt,
-        llm=llm
-    )
+    extractor = LLMChain(prompt=prompt, llm=llm)
     text_splitter = tiktoken_splitter(
-        chunk_size=chunk_size,
-        chunk_overlap=chunk_overlap
+        chunk_size=chunk_size, chunk_overlap=chunk_overlap
     )
     return extractor, text_splitter
 
+
 def tiktoken_splitter(chunk_size=300, chunk_overlap=40):
-    tokenizer = tiktoken.get_encoding('p50k_base')
+    tokenizer = tiktoken.get_encoding("p50k_base")
+
     # create length function
     def len_fn(text):
-        tokens = tokenizer.encode(
-            text, disallowed_special=()
-        )
+        tokens = tokenizer.encode(text, disallowed_special=())
         return len(tokens)
+
     # initialize the text splitter
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
         length_function=len_fn,
-        separators=["\n\n", "\n", " ", ""]
+        separators=["\n\n", "\n", " ", ""],
     )
     return text_splitter
 
 
 class Arxiv:
-    refs_re = re.compile(r'\n(References|REFERENCES)\n')
+    refs_re = re.compile(r"\n(References|REFERENCES)\n")
     references = []
     template = """You are a master PDF reader and when given a set of references you
     always extract the most important information of the papers. For 
@@ -171,12 +164,12 @@ class Arxiv:
     Extracted:
     """
     llm = None
-    get_id = re.compile(r'(?<=arxiv:)\d{4}.\d{5}')
+    get_id = re.compile(r"(?<=arxiv:)\d{4}.\d{5}")
 
     def __init__(self, paper_id: str):
         """Object to handle the extraction of an ArXiv paper and its
         relevant information.
-        
+
         :param paper_id: The ID of the paper to extract
         :type paper_id: str
         """
@@ -184,30 +177,32 @@ class Arxiv:
         self.url = f"https://export.arxiv.org/pdf/{paper_id}.pdf"
         # initialize the requests session
         self.session = requests.Session()
-    
+
     def load(self, save: bool = False):
         """Load the paper from the ArXiv API or from a local file
         if it already exists. Stores the paper's text content and
         meta data in self.content and other attributes.
-        
+
         :param save: Whether to save the paper to a local file,
                      defaults to False
         :type save: bool, optional
         """
         # check if pdf already exists
-        if os.path.exists(f'papers/{self.id}.json'):
-            logger.info(f'Loading papers/{self.id}.json from file')
-            with open(f'papers/{self.id}.json', 'r') as fp:
+        if os.path.exists(f"papers/{self.id}.json"):
+            logger.info(f"Loading papers/{self.id}.json from file")
+            with open(f"papers/{self.id}.json", "r") as fp:
                 attributes = json.loads(fp.read())
             for key, value in attributes.items():
                 setattr(self, key, value)
         else:
             res = self.session.get(self.url)
-            with open(f'temp.pdf', 'wb') as fp:
+            with open(f"temp.pdf", "wb") as fp:
                 fp.write(res.content)
             if not os.path.exists("temp.pdf") or os.path.getsize("temp.pdf") == 0:
                 raise FileNotFoundError(f"Failed to download {self.url} to temp.pdf")
-            logger.info(f"Downloaded {self.url} to temp.pdf, size: {os.path.getsize('temp.pdf')} bytes")
+            logger.info(
+                f"Downloaded {self.url} to temp.pdf, size: {os.path.getsize('temp.pdf')} bytes"
+            )
             # extract text content
             self._convert_pdf_to_text()
             # get meta for PDF
@@ -225,28 +220,28 @@ class Arxiv:
         :return: The references for the paper
         :rtype: list
         """
-        logger.info(f'Extracting references for {self.id}')
+        logger.info(f"Extracting references for {self.id}")
         if len(self.references) == 0:
             content = self.content.lower()
             matches = self.get_id.findall(content)
             matches = list(set(matches))
             self.references = [{"id": m} for m in matches]
-        logger.info(f'Found {len(self.references)} references')
+        logger.info(f"Found {len(self.references)} references")
         return self.references
-    
+
     def _convert_pdf_to_text(self):
         """Convert the PDF to text and store it in the self.content
         attribute.
         """
         text = []
-            # create a PDF object
-        pdf=PyPDF2.PdfReader('temp.pdf')
-            # iterate over every page in the PDF
+        # create a PDF object
+        pdf = PyPDF2.PdfReader("temp.pdf")
+        # iterate over every page in the PDF
         for page in range(len(pdf.pages)):
-                # get the page object
-                page_obj = pdf.pages[page]
-                # extract text from the page
-                text.append(page_obj.extract_text()or"")
+            # get the page object
+            page_obj = pdf.pages[page]
+            # extract text from the page
+            text.append(page_obj.extract_text() or "")
         text = "\n".join(text)
         self.content = text
 
@@ -255,35 +250,38 @@ class Arxiv:
         ArXiv API and store it in the self attributes.
         """
         search = arxiv.Search(
-            query=f'id:{self.id}',
+            query=f"id:{self.id}",
             max_results=1,
-            sort_by=arxiv.SortCriterion.SubmittedDate
+            sort_by=arxiv.SortCriterion.SubmittedDate,
         )
         result = list(search.results())
         if len(result) == 0:
             raise ValueError(f"No paper found for paper '{self.id}'")
         result = result[0]
         # remove 'v1', 'v2', etc. from the end of the pdf_url
-        result.pdf_url = re.sub(r'v\d+$', '', result.pdf_url)
+        result.pdf_url = re.sub(r"v\d+$", "", result.pdf_url)
         self.authors = [author.name for author in result.authors]
         self.categories = result.categories
         self.comment = result.comment
         self.journal_ref = result.journal_ref
         self.source = result.pdf_url
         self.primary_category = result.primary_category
-        self.published = result.published.strftime('%Y%m%d')
+        self.published = result.published.strftime("%Y%m%d")
         self.summary = result.summary
         self.title = result.title
-        self.updated = result.updated.strftime('%Y%m%d')
+        self.updated = result.updated.strftime("%Y%m%d")
         logger.info(f"Downloaded metadata for paper '{self.id}'")
+
     def download_pdf(self, output_path: str = "temp.pdf"):
         """Download the PDF from the paper's source URL and save it locally.
-        
+
         :param output_path: The path where the PDF will be saved, defaults to "temp.pdf"
         :type output_path: str, optional
         """
-        if not hasattr(self, 'source') or not self.source:
-            logger.error("PDF source URL is not set. Please call _download_meta() first.")
+        if not hasattr(self, "source") or not self.source:
+            logger.error(
+                "PDF source URL is not set. Please call _download_meta() first."
+            )
             return
         try:
             response = requests.get(self.source, stream=True)
@@ -297,18 +295,13 @@ class Arxiv:
             logger.error(f"Error downloading PDF from '{self.source}': {e}")
 
     def save(self):
-        """Save the paper to a local JSON file.
-        """
-        with open(f'papers/{self.id}.json', 'w') as fp:
+        """Save the paper to a local JSON file."""
+        with open(f"papers/{self.id}.json", "w") as fp:
             json.dump(self.__dict__(), fp, indent=4)
 
-    def save_chunks(
-        self,
-        include_metadata: bool = True,
-        path: str = "chunks"
-        ):
+    def save_chunks(self, include_metadata: bool = True, path: str = "chunks"):
         """Save the paper's chunks to a local JSONL file.
-        
+
         :param include_metadata: Whether to include the paper's
                                  metadata in the chunks, defaults
                                  to True
@@ -318,15 +311,15 @@ class Arxiv:
         """
         if not os.path.exists(path):
             os.makedirs(path)
-        with open(f'{path}/{self.id}-chunks.jsonl', 'w') as fp:
+        with open(f"{path}/{self.id}-chunks.jsonl", "w") as fp:
             for chunk in self.dataset:
                 if include_metadata:
                     chunk.update(self.get_meta())
-                fp.write(json.dumps(chunk) + '\n')
+                fp.write(json.dumps(chunk) + "\n")
             logger.info(f"Saved paper to '{path}/{self.id}.jsonl'")
         with open(f"{path}/{self.id}.jsonl", "w") as fp:
             fp.write(json.dumps(self.__dict__()))
-    
+
     def get_meta(self):
         """Returns the meta information for the paper.
 
@@ -335,57 +328,48 @@ class Arxiv:
         """
         fields = self.__dict__()
         # drop content field because it's big
-        fields.pop('content')
+        fields.pop("content")
         return fields
-    
+
     def chunker(self, chunk_size=300):
         # Ensure content is loaded before chunking
-        if not hasattr(self, 'content') or self.content is None:
+        if not hasattr(self, "content") or self.content is None:
             self.load()
-        
+
         # clean and split into initial smaller chunks
         clean_paper = self._clean_text(self.content)
         splitter = tiktoken_splitter(chunk_size=chunk_size)
-        
+
         langchain_dataset = []
 
         paper_chunks = splitter.split_text(clean_paper)
         for i, chunk in enumerate(paper_chunks):
-            langchain_dataset.append({
-                'doi': self.id,
-                'chunk-id': str(i),
-                'chunk': chunk
-            })
+            langchain_dataset.append(
+                {"doi": self.id, "chunk-id": str(i), "chunk": chunk}
+            )
         logger.info(f"Split paper into {len(paper_chunks)} chunks")
         self.dataset = langchain_dataset
 
     def _clean_text(self, text):
-        text = re.sub(r'-\n', '', text)
+        text = re.sub(r"-\n", "", text)
         return text
 
     def __dict__(self):
         return {
-            'id': self.id,
-            'title': self.title,
-            'summary': self.summary,
-            'source': self.source,
-            'authors': self.authors,
-            'categories': self.categories,
-            'comment': self.comment,
-            'journal_ref': self.journal_ref,
-            'primary_category': self.primary_category,
-            'published': self.published,
-            'updated': self.updated,
-            'content': self.content,
-            'references': self.references
+            "id": self.id,
+            "title": self.title,
+            "summary": self.summary,
+            "source": self.source,
+            "authors": self.authors,
+            "categories": self.categories,
+            "comment": self.comment,
+            "journal_ref": self.journal_ref,
+            "primary_category": self.primary_category,
+            "published": self.published,
+            "updated": self.updated,
+            "content": self.content,
+            "references": self.references,
         }
-    
+
     def __repr__(self):
         return f"Arxiv(paper_id='{self.id}')"
-       
-
-
-    
-
-      
-

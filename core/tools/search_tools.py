@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 # Data model (maps to state.PaperRecord)
 # ---------------------------------------------------------------------------
 
+
 class PaperMeta:
     """Lightweight paper metadata returned by search functions."""
 
@@ -62,6 +63,7 @@ class PaperMeta:
 # ---------------------------------------------------------------------------
 # ArXiv search (wraps existing paperconstructor + arxiv library)
 # ---------------------------------------------------------------------------
+
 
 async def search_arxiv(
     query: str,
@@ -112,6 +114,7 @@ async def search_arxiv(
 # Semantic Scholar search
 # ---------------------------------------------------------------------------
 
+
 async def search_semantic_scholar(
     query: str,
     max_results: int = 50,
@@ -131,7 +134,9 @@ async def search_semantic_scholar(
 
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+            async with session.get(
+                url, params=params, timeout=aiohttp.ClientTimeout(total=30)
+            ) as resp:
                 if resp.status != 200:
                     logger.warning(f"Semantic Scholar returned {resp.status}")
                     return papers
@@ -144,18 +149,14 @@ async def search_semantic_scholar(
                 PaperMeta(
                     paper_id=ext.get("DOI") or item.get("paperId", ""),
                     title=item.get("title", ""),
-                    authors=[
-                        a.get("name", "") for a in (item.get("authors") or [])
-                    ],
+                    authors=[a.get("name", "") for a in (item.get("authors") or [])],
                     year=item.get("year"),
                     abstract=item.get("abstract") or "",
                     source_url=item.get("url") or "",
                     database="semantic_scholar",
                 )
             )
-        logger.info(
-            f"Semantic Scholar search for '{query}': {len(papers)} results"
-        )
+        logger.info(f"Semantic Scholar search for '{query}': {len(papers)} results")
 
     except Exception as e:
         logger.error(f"Semantic Scholar search failed: {e}")
@@ -166,6 +167,7 @@ async def search_semantic_scholar(
 # ---------------------------------------------------------------------------
 # Crossref search
 # ---------------------------------------------------------------------------
+
 
 async def search_crossref(
     query: str,
@@ -235,6 +237,7 @@ async def search_crossref(
 # ---------------------------------------------------------------------------
 # Multi-database search (orchestrates all)
 # ---------------------------------------------------------------------------
+
 
 async def search_multiple_databases(
     query: str,

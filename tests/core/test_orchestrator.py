@@ -27,6 +27,7 @@ from core.registry import AgentRegistry
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _run(coro):
     """Run an async coroutine synchronously for test convenience."""
     return asyncio.get_event_loop().run_until_complete(coro)
@@ -38,6 +39,7 @@ PREFS = {"citation_format": "apa"}
 # ---------------------------------------------------------------------------
 # Workflow & Task data classes
 # ---------------------------------------------------------------------------
+
 
 class TestWorkflowAndTask:
     def test_task_creation(self):
@@ -62,6 +64,7 @@ class TestWorkflowAndTask:
 # Context
 # ---------------------------------------------------------------------------
 
+
 class TestContext:
     def test_defaults(self):
         ctx = Context()
@@ -70,9 +73,12 @@ class TestContext:
         assert ctx.extra == {}
 
     def test_custom(self):
-        ctx = Context(project_id="p1", knowledge_graph_id="kg_1",
-                      researcher_preferences={"style": "apa"},
-                      extra={"focus": "ml"})
+        ctx = Context(
+            project_id="p1",
+            knowledge_graph_id="kg_1",
+            researcher_preferences={"style": "apa"},
+            extra={"focus": "ml"},
+        )
         assert ctx.project_id == "p1"
         assert ctx.extra["focus"] == "ml"
 
@@ -81,9 +87,11 @@ class TestContext:
 # AgentRegistry
 # ---------------------------------------------------------------------------
 
+
 class TestAgentRegistry:
     def test_register_and_list(self):
         from agents.literature_review_agent import LiteratureReviewAgent
+
         reg = AgentRegistry()
         reg.register("LitReview", LiteratureReviewAgent())
         assert "LitReview" in reg.list_agents()
@@ -99,12 +107,18 @@ class TestAgentRegistry:
 
     def test_call_agent(self):
         from agents.knowledge_graph_agent import KnowledgeGraphAgent
+
         reg = AgentRegistry()
         reg.register("KG", KnowledgeGraphAgent())
-        result = _run(reg.call_agent("KG", {
-            "action": "initialize_graph",
-            "project_name": "Test",
-        }))
+        result = _run(
+            reg.call_agent(
+                "KG",
+                {
+                    "action": "initialize_graph",
+                    "project_name": "Test",
+                },
+            )
+        )
         assert result["status"] == "completed"
         assert "graph_id" in result
 
@@ -112,6 +126,7 @@ class TestAgentRegistry:
 # ---------------------------------------------------------------------------
 # Orchestrator – instantiation
 # ---------------------------------------------------------------------------
+
 
 class TestOrchestratorInit:
     def test_creates_with_preferences(self):
@@ -138,6 +153,7 @@ class TestOrchestratorInit:
 # Orchestrator – project lifecycle
 # ---------------------------------------------------------------------------
 
+
 class TestOrchestratorProjects:
     def test_start_project(self):
         orch = ResearchWorkflowOrchestrator(PREFS)
@@ -156,9 +172,9 @@ class TestOrchestratorProjects:
     def test_start_workflow_with_custom_params(self):
         orch = ResearchWorkflowOrchestrator(PREFS)
         pid = _run(orch.start_research_project("P1", "d"))
-        wid = _run(orch.start_research_workflow(
-            pid, "data_analysis", {"focus": "stats"}
-        ))
+        wid = _run(
+            orch.start_research_workflow(pid, "data_analysis", {"focus": "stats"})
+        )
         wf = orch.active_research_projects[pid]["workflows"][wid]
         assert wf["context"].extra == {"focus": "stats"}
 
@@ -177,6 +193,7 @@ class TestOrchestratorProjects:
 # ---------------------------------------------------------------------------
 # Orchestrator – progress & suggestions
 # ---------------------------------------------------------------------------
+
 
 class TestOrchestratorProgress:
     def test_get_progress(self):
@@ -219,6 +236,7 @@ class TestOrchestratorProgress:
 # Workflow template content
 # ---------------------------------------------------------------------------
 
+
 class TestWorkflowTemplates:
     def test_literature_review_pipeline(self):
         orch = ResearchWorkflowOrchestrator(PREFS)
@@ -248,8 +266,6 @@ class TestWorkflowTemplates:
         prefs = {"preferred_statistical_methods": ["t-test", "anova"]}
         orch = ResearchWorkflowOrchestrator(prefs)
         wf = orch._customize_workflow(orch.workflow_templates["data_analysis"])
-        stat_task = next(
-            (t for t in wf.tasks if t.name == "statistical_testing"), None
-        )
+        stat_task = next((t for t in wf.tasks if t.name == "statistical_testing"), None)
         assert stat_task is not None, "statistical_testing task not found"
         assert stat_task.parameters["preferred_methods"] == ["t-test", "anova"]

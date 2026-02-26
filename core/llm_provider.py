@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 # Abstract interface
 # ---------------------------------------------------------------------------
 
+
 class LLMProvider:
     """
     Abstract base for LLM providers.
@@ -68,6 +69,7 @@ class LLMProvider:
 # ---------------------------------------------------------------------------
 # Groq Provider (primary)
 # ---------------------------------------------------------------------------
+
 
 class GroqProvider(LLMProvider):
     """
@@ -139,7 +141,7 @@ class GroqProvider(LLMProvider):
             system_prompt=(
                 (system_prompt or "")
                 + f"\n\nRespond ONLY with valid JSON matching this schema:\n"
-                  f"{json.dumps(schema.model_json_schema(), indent=2)}"
+                f"{json.dumps(schema.model_json_schema(), indent=2)}"
             ),
             temperature=temperature,
             **kwargs,
@@ -156,6 +158,7 @@ class GroqProvider(LLMProvider):
 # ---------------------------------------------------------------------------
 # Mistral Provider (Document AI annotations)
 # ---------------------------------------------------------------------------
+
 
 class MistralProvider(LLMProvider):
     """
@@ -261,6 +264,7 @@ class MistralProvider(LLMProvider):
 # Ollama Provider (local fallback)
 # ---------------------------------------------------------------------------
 
+
 class OllamaProvider(LLMProvider):
     """Local LLM via Ollama — works offline, no API keys."""
 
@@ -305,6 +309,7 @@ class OllamaProvider(LLMProvider):
 # Factory — create provider from config
 # ---------------------------------------------------------------------------
 
+
 def create_llm_provider(
     provider: str = "groq",
     model: Optional[str] = None,
@@ -330,8 +335,7 @@ def create_llm_provider(
         return OllamaProvider(model=model or "llama3.1:8b", **kwargs)
     else:
         raise ValueError(
-            f"Unknown LLM provider: {provider!r}. "
-            f"Supported: groq, mistral, ollama"
+            f"Unknown LLM provider: {provider!r}. " f"Supported: groq, mistral, ollama"
         )
 
 
@@ -356,3 +360,69 @@ def create_llm_from_config(config_path: str = "config/config.yaml") -> LLMProvid
         model=model,
         temperature=llm_cfg.get("temperature", 0.7),
     )
+
+
+# ---------------------------------------------------------------------------
+# Tiered providers — Agentic RAG model routing
+# ---------------------------------------------------------------------------
+
+
+def create_tiered_providers(
+    config_path: str = "config/config.yaml",
+) -> Dict[str, Any]:
+    """
+    Create tier-specific LLM providers from config.
+
+    Returns a dict with::
+
+        {
+            "fast": LLMProvider,         # 8B — screening, queries
+            "deep": LLMProvider,         # 70B — synthesis, analysis
+            "agent_tiers": {             # node name → tier name
+                "literature_review": "fast",
+                "writing": "deep",
+                ...
+            },
+        }
+
+    Falls back to a single GroqProvider for all tiers if config
+    is missing or the tiers section is absent.
+    """
+    import yaml
+
+    path = Path(config_path)
+    if not path.exists():
+        logger.warning(f"Config not found at {config_path}, using single Groq default")
+        default = GroqProvider()
+        return {"fast": default, "deep": default, "agent_tiers": {}}
+
+    with open(path) as f:
+        cfg = yaml.safe_load(f) or {}
+
+    llm_cfg = cfg.get("llm", {})
+    tiers_cfg = llm_cfg.get("tiers", {})
+    agent_tiers = llm_cfg.get("agent_tiers", {})
+
+    providers: Dict[str, LLMProvider] = {}
+
+    for tier_name, tier_def in tiers_cfg.items():
+        if not isinstance(tier_def, dict):
+            continue
+        providers[tier_name] = create_llm_provider(
+            provider=tier_def.get("provider", "groq"),
+            model=tier_def.get("model"),
+            temperature=tier_def.get("temperature", 0.7),
+        )
+        logger.info(
+            f"Tier '{tier_name}' → {tier_def.get('provider')}/"
+            f"{tier_def.get('model')}"
+        )
+
+    # Ensure at least fast + deep exist (fallback)
+    if "fast" not in providers:
+        providers["fast"] = GroqProvider(model="llama-3.1-8b-instant")
+    if "deep" not in providers:
+        providers["deep"] = providers["fast"]
+
+    providers["agent_tiers"] = agent_tiers  # type: ignore[assignment]
+    return providers

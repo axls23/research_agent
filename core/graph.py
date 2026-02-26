@@ -13,7 +13,11 @@ from typing import Any, Dict, Literal, Optional
 from langgraph.graph import END, StateGraph
 
 from core.state import ResearchState, make_initial_state
-from core.llm_provider import LLMProvider, create_llm_from_config
+from core.llm_provider import (
+    LLMProvider,
+    create_llm_from_config,
+    create_tiered_providers,
+)
 from core.nodes.literature_review_node import literature_review_node
 from core.nodes.data_processing_node import data_processing_node
 from core.nodes.knowledge_graph_node import knowledge_graph_node
@@ -29,6 +33,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Routing functions (conditional edges)
 # ---------------------------------------------------------------------------
+
 
 def _route_after_validation(state: ResearchState) -> str:
     """
@@ -64,9 +69,21 @@ def _should_validate(state: ResearchState) -> str:
     return "validate"
 
 
+def _route_after_writing(state: ResearchState) -> str:
+    """
+    After writing_node runs, decide next step:
+    - If needs_more_papers AND backtrack budget remains → loop back
+    - Otherwise → proceed to audit_formatter
+    """
+    if state.get("needs_more_papers", False):
+        return "backtrack"
+    return "finish"
+
+
 # ---------------------------------------------------------------------------
 # Graph Builder
 # ---------------------------------------------------------------------------
+
 
 def build_research_graph(
     rigor_level: str = "exploratory",
@@ -112,7 +129,14 @@ def build_research_graph(
         graph.add_edge("data_processing", "knowledge_graph")
         graph.add_edge("knowledge_graph", "analysis")
         graph.add_edge("analysis", "writing")
-        graph.add_edge("writing", "audit_formatter")
+        graph.add_conditional_edges(
+            "writing",
+            _route_after_writing,
+            {
+                "backtrack": "literature_review",
+                "finish": "audit_formatter",
+            },
+        )
     else:
         # === Gate 1: After literature review ===
         graph.add_edge("literature_review", "validator_post_lit")
@@ -174,8 +198,15 @@ def build_research_graph(
             },
         )
 
-        # writing → audit_formatter
-        graph.add_edge("writing", "audit_formatter")
+        # writing → audit_formatter OR backtrack to literature_review
+        graph.add_conditional_edges(
+            "writing",
+            _route_after_writing,
+            {
+                "backtrack": "literature_review",
+                "finish": "audit_formatter",
+            },
+        )
 
     # ---- Terminal edge ----
     graph.add_edge("audit_formatter", END)
@@ -193,6 +224,7 @@ def build_research_graph(
 # Convenience runner
 # ---------------------------------------------------------------------------
 
+
 async def run_research_pipeline(
     project_name: str,
     research_topic: str,
@@ -201,9 +233,15 @@ async def run_research_pipeline(
     llm: Optional[LLMProvider] = None,
     interactive: bool = True,
     config_path: str = "config/config.yaml",
+    mode: Literal["deterministic", "agentic"] = "deterministic",
 ) -> ResearchState:
     """
     High-level function to run the full research pipeline.
+
+    Args:
+        mode: Pipeline execution mode.
+            - "deterministic": Fixed StateGraph pipeline (default, backward-compatible)
+            - "agentic": ReAct orchestrator with Deep Agents (agent decides flow)
 
     Usage::
 
@@ -212,17 +250,49 @@ async def run_research_pipeline(
             research_topic="Machine Learning in Healthcare",
             research_goals=["accuracy", "interpretability"],
             rigor_level="prisma",
+            mode="agentic",  # <-- ReAct agent loop
         )
     """
+    # ---- Agentic Mode: ReAct Orchestrator ----
+    if mode == "agentic":
+        from core.orchestrator import run_agentic_pipeline
+
+        logger.info(f"Starting AGENTIC pipeline: {project_name} ({rigor_level})")
+        result = await run_agentic_pipeline(
+            project_name=project_name,
+            research_topic=research_topic,
+            research_goals=research_goals,
+        )
+        logger.info("Agentic pipeline complete!")
+        return result
+
+    # ---- Deterministic Mode: StateGraph (default) ----
     import uuid
 
-    # Create LLM if not provided
+    # Create LLM providers (tiered routing)
     if llm is None:
         try:
-            llm = create_llm_from_config(config_path)
+            tiers = create_tiered_providers(config_path)
+            llm_fast = tiers.get("fast")
+            llm_deep = tiers.get("deep")
+            agent_tiers = tiers.get("agent_tiers", {})
+            # Use deep as the default / backward-compatible "llm"
+            llm = llm_deep
+            logger.info(
+                f"Tiered routing active: "
+                f"fast={getattr(llm_fast, 'model', '?')}, "
+                f"deep={getattr(llm_deep, 'model', '?')}"
+            )
         except Exception as e:
-            logger.warning(f"Failed to create LLM from config: {e}")
-            llm = None
+            logger.warning(f"Failed to create tiered providers: {e}")
+            llm_fast = None
+            llm_deep = None
+            agent_tiers = {}
+    else:
+        # Custom LLM passed — use it for everything
+        llm_fast = llm
+        llm_deep = llm
+        agent_tiers = {}
 
     # Build initial state
     initial_state = make_initial_state(
@@ -236,16 +306,19 @@ async def run_research_pipeline(
     # Build and compile graph
     graph = build_research_graph(rigor_level=rigor_level)
 
-    # Run
+    # Run — pass tiered LLMs through config so each node picks the right one
     config = {
         "configurable": {
-            "llm": llm,
+            "llm": llm,  # backward-compatible default
+            "llm_fast": llm_fast,  # 8B — screening, queries, validation
+            "llm_deep": llm_deep,  # 70B — synthesis, analysis, writing
+            "agent_tiers": agent_tiers,
             "interactive": interactive,
             "output_dir": "outputs",
         }
     }
 
-    logger.info(f"Starting pipeline: {project_name} ({rigor_level})")
+    logger.info(f"Starting DETERMINISTIC pipeline: {project_name} ({rigor_level})")
     result = await graph.ainvoke(initial_state, config=config)
     logger.info("Pipeline complete!")
 

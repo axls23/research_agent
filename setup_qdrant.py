@@ -17,15 +17,19 @@ if not QDRANT_URL or not QDRANT_API_KEY:
 print(f"Connecting to Qdrant Cloud at {QDRANT_URL}...")
 try:
     client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
-    
+
     # Check existing collections
     collections = client.get_collections()
-    print(f"Successfully connected! Current collections: {[c.name for c in collections.collections]}")
-    
+    print(
+        f"Successfully connected! Current collections: {[c.name for c in collections.collections]}"
+    )
+
     collection_name = "research_entities"
-    
+
     if client.collection_exists(collection_name):
-        print(f"Collection '{collection_name}' already exists. Recreating it to ensure clean state...")
+        print(
+            f"Collection '{collection_name}' already exists. Recreating it to ensure clean state..."
+        )
         client.delete_collection(collection_name=collection_name)
     else:
         print(f"Creating collection '{collection_name}'...")
@@ -38,7 +42,7 @@ try:
             distance=models.Distance.COSINE,
         ),
     )
-    
+
     print("\n[SUCCESS] Setup complete! Qdrant Cloud is ready to receive vectors.")
 
 except Exception as e:

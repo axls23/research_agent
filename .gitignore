@@ -7,9 +7,12 @@ __pycache__/
 dist/
 build/
 .pytest_cache/
-temp.pdf
+*.pdf
 logs/
+*.log
 outputs/
+.coverage
+proposal_lit_review.md
 
 # Downloaded papers (large PDFs)
 papers/

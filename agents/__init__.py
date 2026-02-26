@@ -6,10 +6,10 @@ from .knowledge_graph_agent import KnowledgeGraphAgent
 from .collaboration_agent import CollaborationAgent
 
 __all__ = [
-    'LiteratureReviewAgent',
-    'DataProcessingAgent',
-    'AnalysisAgent',
-    'WritingAssistantAgent',
-    'KnowledgeGraphAgent',
-    'CollaborationAgent'
-] 
+    "LiteratureReviewAgent",
+    "DataProcessingAgent",
+    "AnalysisAgent",
+    "WritingAssistantAgent",
+    "KnowledgeGraphAgent",
+    "CollaborationAgent",
+]

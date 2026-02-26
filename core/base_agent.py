@@ -55,9 +55,7 @@ class ResearchAgent:
     async def validate_input(self, input_data: Dict[str, Any]) -> bool:
         """Validate input data before processing."""
         required_fields = self.get_required_fields()
-        missing_fields = [
-            field for field in required_fields if field not in input_data
-        ]
+        missing_fields = [field for field in required_fields if field not in input_data]
         if missing_fields:
             self.logger.error(f"Missing required fields: {missing_fields}")
             return False

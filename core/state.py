@@ -19,54 +19,62 @@ from typing_extensions import TypedDict
 # Sub-types
 # ---------------------------------------------------------------------------
 
+
 class AuditEntry(TypedDict):
     """Immutable record appended by every agent node."""
-    timestamp: str          # ISO-8601 UTC
-    agent: str              # e.g. "literature_review_node"
-    action: str             # e.g. "search_arxiv"
-    input_hash: str         # SHA-256 of serialised inputs (reproducibility)
-    output_summary: str     # Short human-readable description of output
+
+    timestamp: str  # ISO-8601 UTC
+    agent: str  # e.g. "literature_review_node"
+    action: str  # e.g. "search_arxiv"
+    input_hash: str  # SHA-256 of serialised inputs (reproducibility)
+    output_summary: str  # Short human-readable description of output
     provenance: Dict[str, Any]  # Raw pointers (paper IDs, file paths, etc.)
 
 
 class ValidationReport(TypedDict):
     """Produced by quality_validator_node at each gate."""
-    gate_name: str              # e.g. "post_literature_review"
-    rigor_level: str            # "exploratory" | "prisma" | "cochrane"
+
+    gate_name: str  # e.g. "post_literature_review"
+    rigor_level: str  # "exploratory" | "prisma" | "cochrane"
     passed: bool
-    criteria: Dict[str, Any]    # Loaded from YAML workflow config
-    failures: List[str]         # Human-readable failure reasons
+    criteria: Dict[str, Any]  # Loaded from YAML workflow config
+    failures: List[str]  # Human-readable failure reasons
     timestamp: str
+    model_critique: Optional[str]  # LLM self-critique (Anthropic-inspired)
 
 
 class HumanDecision(TypedDict):
     """Records a human-in-the-loop intervention."""
+
     gate_name: str
     validation_failures: List[str]
     decision: Literal["retry", "override", "abort"]
-    reason: str                 # Free-text justification
+    reason: str  # Free-text justification
     timestamp: str
 
 
 class PaperRecord(TypedDict):
     """Metadata + extraction result for one paper."""
-    paper_id: str               # ArXiv ID, DOI, or internal UUID
+
+    paper_id: str  # ArXiv ID, DOI, or internal UUID
     title: str
     authors: List[str]
     year: Optional[int]
     abstract: str
     source_url: str
-    databases: List[str]        # Which databases returned this paper
+    databases: List[str]  # Which databases returned this paper
     # Post-extraction
-    full_text: Optional[str]    # Extracted via Mistral Document AI
+    full_text: Optional[str]  # Extracted via Mistral Document AI
     annotations: Optional[Dict[str, Any]]  # Mistral structured annotations
     quality_score: Optional[float]
-    included: bool              # PRISMA: included in final review
+    included: bool  # PRISMA: included in final review
     exclusion_reason: Optional[str]
+    needs_human_review: Optional[bool]  # Flagged when screening confidence < 0.5
 
 
 class Chunk(TypedDict):
     """Text chunk from a paper, ready for embedding."""
+
     chunk_id: str
     paper_id: str
     text: str
@@ -75,18 +83,25 @@ class Chunk(TypedDict):
 
 
 class KnowledgeEntity(TypedDict):
-    """A node in the knowledge graph."""
+    """A node in the knowledge graph.
+
+    Labels follow the PRISMA 2020 ontology:
+        paper, objective, methodology, result, limitation, implication
+    """
+
     entity_id: str
-    label: str       # e.g. "concept", "method", "result"
+    label: str  # "paper"|"objective"|"methodology"|"result"|"limitation"|"implication"
     text: str
     paper_ids: List[str]
+    prisma_properties: Optional[Dict[str, Any]]  # Label-dependent PRISMA metadata
 
 
 class AnalysisResult(TypedDict):
     """Output from the analysis node."""
+
     method: str
     result_summary: str
-    figures: List[str]     # File paths to generated charts
+    figures: List[str]  # File paths to generated charts
     tables: List[Dict[str, Any]]
     statistical_output: Optional[Dict[str, Any]]
 
@@ -94,6 +109,7 @@ class AnalysisResult(TypedDict):
 # ---------------------------------------------------------------------------
 # Main State
 # ---------------------------------------------------------------------------
+
 
 class ResearchState(TypedDict):
     """
@@ -114,16 +130,16 @@ class ResearchState(TypedDict):
     rigor_level: Literal["exploratory", "prisma", "cochrane"]
 
     # ---- Workflow control ----
-    current_node: str          # Name of the node currently executing
+    current_node: str  # Name of the node currently executing
     last_validation_passed: bool
-    abort: bool                # Set True by human_intervention to stop graph
+    abort: bool  # Set True by human_intervention to stop graph
 
     # ---- Literature Review ----
     search_queries: List[str]
-    databases_searched: List[str]   # PRISMA: which DBs were queried
-    papers_found: int               # PRISMA: total raw hits
-    papers_screened: int            # PRISMA: after title/abstract screen
-    papers_included: int            # PRISMA: after full-text inclusion
+    databases_searched: List[str]  # PRISMA: which DBs were queried
+    papers_found: int  # PRISMA: total raw hits
+    papers_screened: int  # PRISMA: after title/abstract screen
+    papers_included: int  # PRISMA: after full-text inclusion
     papers: List[PaperRecord]
 
     # ---- Data Processing ----
@@ -141,21 +157,25 @@ class ResearchState(TypedDict):
     # ---- Writing ----
     outline: Optional[str]
     draft_sections: Dict[str, str]  # section_name -> text
+    needs_more_papers: bool  # Backtrack signal: writing → lit review
+    gap_analysis: Optional[str]  # What evidence is missing
+    backtrack_count: int  # Cap loops to prevent infinite cycles
     methods_section: Optional[str]  # Auto-generated from audit trail
 
     # ---- Audit & Compliance ----
-    audit_log: List[AuditEntry]         # APPEND ONLY
+    audit_log: List[AuditEntry]  # APPEND ONLY
     validation_reports: List[ValidationReport]
     human_decisions: List[HumanDecision]
 
     # ---- Output artifacts ----
-    prisma_flow_diagram: Optional[str]   # Path or ASCII string
-    audit_export_path: Optional[str]     # Path to JSON export
+    prisma_flow_diagram: Optional[str]  # Path or ASCII string
+    audit_export_path: Optional[str]  # Path to JSON export
 
 
 # ---------------------------------------------------------------------------
 # Helper constructors
 # ---------------------------------------------------------------------------
+
 
 def make_initial_state(
     project_id: str,
@@ -188,6 +208,9 @@ def make_initial_state(
         analysis_results=[],
         outline=None,
         draft_sections={},
+        needs_more_papers=False,
+        gap_analysis=None,
+        backtrack_count=0,
         methods_section=None,
         audit_log=[],
         validation_reports=[],

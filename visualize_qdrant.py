@@ -19,7 +19,7 @@ points = client.scroll(
     collection_name="research_entities",
     limit=2000,
     with_payload=True,
-    with_vectors=True
+    with_vectors=True,
 )[0]
 
 print(f"Retrieved {len(points)} entities. Reducing 384 dimensions to 2D with t-SNE...")
@@ -35,30 +35,29 @@ tsne = TSNE(n_components=2, perplexity=30, random_state=42)
 reduced_vectors = tsne.fit_transform(vectors)
 
 # Create DataFrame for Plotly
-df = pd.DataFrame({
-    'x': reduced_vectors[:, 0],
-    'y': reduced_vectors[:, 1],
-    'entity': [p['text'] for p in payloads],
-    'label': [p.get('label', 'Concept') for p in payloads],
-    'paper': [p.get('paper_ids', ['Unknown'])[0] for p in payloads]
-})
+df = pd.DataFrame(
+    {
+        "x": reduced_vectors[:, 0],
+        "y": reduced_vectors[:, 1],
+        "entity": [p["text"] for p in payloads],
+        "label": [p.get("label", "Concept") for p in payloads],
+        "paper": [p.get("paper_ids", ["Unknown"])[0] for p in payloads],
+    }
+)
 
 print("Generating HTML Visualization...")
 fig = px.scatter(
-    df, x='x', y='y', 
-    color='label', 
-    hover_name='entity', 
-    hover_data=['paper'],
-    title="Semantic Space Map of Research Entities (t-SNE scaled BGE-small embeddings)"
+    df,
+    x="x",
+    y="y",
+    color="label",
+    hover_name="entity",
+    hover_data=["paper"],
+    title="Semantic Space Map of Research Entities (t-SNE scaled BGE-small embeddings)",
 )
 
 # Dark theme layout mapping
-fig.update_layout(
-    template="plotly_dark",
-    title_font_size=20,
-    height=800,
-    width=1400
-)
+fig.update_layout(template="plotly_dark", title_font_size=20, height=800, width=1400)
 
 # Save to html
 output_file = "qdrant_semantic_map.html"

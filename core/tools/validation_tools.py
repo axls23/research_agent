@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 # Load workflow config
 # ---------------------------------------------------------------------------
 
+
 def load_workflow_config(rigor_level: str) -> Dict[str, Any]:
     """
     Load validation criteria from a YAML workflow file.
@@ -43,6 +44,7 @@ def load_workflow_config(rigor_level: str) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Individual validation checks
 # ---------------------------------------------------------------------------
+
 
 def validate_search_coverage(
     state: ResearchState,
@@ -67,7 +69,8 @@ def validate_search_coverage(
 
     if criteria.get("require_search_log", False):
         search_entries = [
-            e for e in state.get("audit_log", [])
+            e
+            for e in state.get("audit_log", [])
             if "search" in e.get("action", "").lower()
         ]
         if not search_entries:
@@ -155,6 +158,7 @@ def validate_analysis_assumptions(
 # ---------------------------------------------------------------------------
 # Master validation runner
 # ---------------------------------------------------------------------------
+
 
 def run_validation_gate(
     state: ResearchState,

@@ -4,6 +4,51 @@
 
 ---
 
+## Session 5 — 2026-02-26
+
+**Focus**: Deep Agents SDK Integration & ReAct Orchestrator Loop
+
+### What Got Built
+| Component | Status | Details |
+|-----------|--------|---------|
+| PRISMA Knowledge Graph (GLiNER) | ✅ Done | Built a 2-Tier entity extraction pipeline (`core/nodes/prisma_extractor.py`). **Tier 1**: Local zero-shot NER using `urchade/gliner_mediumv2.1` for grounded span detection. **Tier 2**: Uses LLM + Pydantic schema validated against PRISMA 2020 rules (Objective, Methodology, Result, Limitation, Implication). Supports relationships like `INVESTIGATES`, `UTILIZES_METHOD`, and `REPORTS_FINDING`. |
+| Deep Agents Setup | ✅ Done | Integrated `deepagents` SDK. Refactored the orchestrator (`core/orchestrator.py`) to build a ReAct agent loop replacing the deterministic StateGraph when `--mode agentic` is passed. |
+| Tool Wrappers | ✅ Done | Created `core/agent_tools.py` bridging LangGraph nodes to Deep Agents callable tools (`search_literature`, `extract_prisma_knowledge`, etc.) with full auto-schema generation. Qdrant Syntax updated to v1.17 `query_points`. |
+| Subagents Rewritten | ✅ Done | Legacy stub agents (`KnowledgeGraphAgent`, `AnalysisAgent`, `DataProcessingAgent`, `WritingAssistantAgent`) rewritten into ReAct subagent logic while preserving legacy backward-compatible actions (`initialize_graph`, etc.) for existing unit tests. |
+| Model Upgrade | ✅ Done | Upgraded the default Groq LLM endpoint from the deprecated `llama-3.1-70b-versatile` to `llama-3.3-70b-versatile`. Explicitly passed `ChatGroq` instance to `create_deep_agent`. |
+
+### Key Results
+- Full execution of `tests/integration/test_deep_agents_e2e.py` passes 23/24 tests. The ReAct Orchestrator successfully builds, routes, and invokes the Llama 3.3 70B model.
+- 100% Backward compatibility maintained for the baseline deterministic pipeline (154/154 unit tests passing).
+
+### Known Issues / Next Steps
+- **Qdrant Collection Missing**: The LLM agent encountered an expected `404 Not Found: Collection 'research_entities' doesn't exist!` error during the E2E test. Next step is to properly initialize the Qdrant Cloud collection before invoking the ReAct retrieval loop.
+
+---
+
+## Session 4 — 2026-02-24
+
+**Focus**: Multi-Agent Enrichment, Tiered LLM Routing & Anthropic-Inspired Design
+
+### What Got Built
+| Component | Status | Details |
+|-----------|--------|---------|
+| Unit Tests | ✅ Done | Created 67 new tests covering state, graph, and validation. |
+| LiteratureReviewAgent Enrichment | ✅ Done | Added PICO decomposition, multi-DB retrieval (ArXiv, S2, Crossref), citation snowballing, and two-pass filtering (heuristic + LLM batch screening). |
+| Tiered Model Routing | ✅ Done | Added tier config to `config.yaml` (`fast` 8B vs `deep` 70B). Wired `graph.py` and node files to select optimal LLMs based on task complexity. |
+| Anthropic: Self-Critique | ✅ Done | Expanded `quality_validator_node` to execute qualitative LLM self-critiques alongside rule-based PRISMA criteria. |
+| Anthropic: Backtrack Loop | ✅ Done | `writing_node` dynamically detects evidence gaps and triggers a `needs_more_papers` conditional edge back to retrieval. |
+| Anthropic: Extended Thinking | ✅ Done | Strengthened `analysis_node` with a structured, multi-step thought process (Categories → Patterns → Contradictions → Gaps → Synthesis). |
+| Anthropic: Confidence Scores | ✅ Done | Added a confidence scoring metric back into the LLM screening agent. Papers with confidence < 0.5 get flagged for `needs_human_review`. |
+| Anthropic: Rich Provenance | ✅ Done | Enriched the PRISMA-compliant audit trails with detailed metadata outlining model tiers, query formulations, and reasoning paths. |
+
+### Key Results
+- 127/127 test suite passing. Zero regressions.
+- Lowered projected LLM API costs roughly ~5x by routing retrieval/screening tasks to local-scale SLMs (8B) and reserving Deep Reasoner models (70B) exclusively for synthesis.
+- Fixed the historical `antlr4` dependency issue breaking validation.
+
+---
+
 ## Session 3 — 2026-02-24
 
 **Focus**: Knowledge Graph Semantic Embedding & Qdrant Cloud Integration

@@ -37,6 +37,30 @@ llm:
     - "meta-llama/llama-guard-4-12b"
     - "groq/compound-mini"
 
+  # Tiered Model Routing (Agentic RAG)
+  # Each tier maps to a reasoning complexity level.
+  # Agents pick the right tier; all use the same GROQ_API_KEY.
+  tiers:
+    fast:  # RETRIEVE + GROUND phase (classification, screening, queries)
+      provider: "groq"
+      model: "llama-3.1-8b-instant"
+      temperature: 0.1
+
+    deep:  # REASON + GENERATE phase (synthesis, analysis, writing)
+      provider: "groq"
+      model: "llama-3.3-70b-versatile"
+      temperature: 0.7
+
+  # Agent-to-tier mapping
+  agent_tiers:
+    literature_review: "fast"
+    data_processing: "fast"
+    knowledge_graph: "deep"
+    analysis: "deep"
+    writing: "deep"
+    quality_validator: "fast"
+    audit_formatter: null  # no LLM needed
+
 # ===== Agent Configuration =====
 agents:
   # Enable/disable specific agents

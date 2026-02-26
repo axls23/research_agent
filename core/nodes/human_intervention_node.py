@@ -41,18 +41,18 @@ async def human_intervention_node(
     gate_name = latest.get("gate_name", "unknown")
 
     # ---- Present to user ----
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print(f"[!] VALIDATION FAILED at gate: {gate_name}")
-    print("="*60)
+    print("=" * 60)
     for i, failure in enumerate(failures, 1):
         print(f"  {i}. {failure}")
     print()
 
     if interactive:
         while True:
-            choice = input(
-                "Decision — [R]etry / [O]verride / [A]bort: "
-            ).strip().lower()
+            choice = (
+                input("Decision — [R]etry / [O]verride / [A]bort: ").strip().lower()
+            )
             if choice in ("r", "retry"):
                 decision = "retry"
                 break

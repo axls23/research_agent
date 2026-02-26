@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 # Mistral Document AI extraction (primary)
 # ---------------------------------------------------------------------------
 
+
 async def extract_with_mistral(
     pdf_path: str,
     mistral_api_key: Optional[str] = None,
@@ -71,6 +72,7 @@ async def extract_with_mistral(
 # PyPDF2 fallback (lightweight, no API)
 # ---------------------------------------------------------------------------
 
+
 async def extract_with_pypdf2(pdf_path: str) -> Dict[str, Any]:
     """
     Extract text from PDF using PyPDF2 (no OCR).
@@ -88,9 +90,7 @@ async def extract_with_pypdf2(pdf_path: str) -> Dict[str, Any]:
                 text_pages.append(page.extract_text() or "")
 
         full_text = "\n".join(text_pages)
-        logger.info(
-            f"PyPDF2 extracted {len(full_text)} chars from {pdf_path}"
-        )
+        logger.info(f"PyPDF2 extracted {len(full_text)} chars from {pdf_path}")
 
         return {
             "full_text": full_text,
@@ -111,6 +111,7 @@ async def extract_with_pypdf2(pdf_path: str) -> Dict[str, Any]:
 # Smart extractor (auto-selects method)
 # ---------------------------------------------------------------------------
 
+
 async def extract_paper_text(
     pdf_path: str,
     use_mistral: bool = True,
@@ -129,6 +130,7 @@ async def extract_paper_text(
 # Chunking (tiktoken-aware)
 # ---------------------------------------------------------------------------
 
+
 def chunk_text(
     text: str,
     paper_id: str,
@@ -145,6 +147,7 @@ def chunk_text(
 
     try:
         import tiktoken
+
         tokenizer = tiktoken.get_encoding("cl100k_base")
 
         def length_fn(t: str) -> int:
@@ -179,6 +182,7 @@ def chunk_text(
 # Download helper
 # ---------------------------------------------------------------------------
 
+
 async def download_pdf(url: str, output_dir: str = "papers") -> str:
     """Download a PDF from URL and return the local file path."""
     import aiohttp
@@ -189,24 +193,29 @@ async def download_pdf(url: str, output_dir: str = "papers") -> str:
     # Check if this is an ArXiv paper (by URL or DOI)
     # arxiv URLs look like: http://arxiv.org/abs/2102.12206 or https://arxiv.org/pdf/2102.12206.pdf
     # or DOI: 10.48550/arXiv.2102.12206
-    arxiv_id_match = re.search(r"arxiv\.org/(?:abs|pdf)/(\d+\.\d+)", url.lower()) or \
-                     re.search(r"arxiv\.(\d+\.\d+)", url.lower())
-    
+    arxiv_id_match = re.search(
+        r"arxiv\.org/(?:abs|pdf)/(\d+\.\d+)", url.lower()
+    ) or re.search(r"arxiv\.(\d+\.\d+)", url.lower())
+
     if arxiv_id_match:
         arxiv_id = arxiv_id_match.group(1)
-        logger.info(f"Detected ArXiv paper ID: {arxiv_id}. Using arxiv package to fetch PDF.")
+        logger.info(
+            f"Detected ArXiv paper ID: {arxiv_id}. Using arxiv package to fetch PDF."
+        )
         output_path = os.path.join(output_dir, f"{arxiv_id}.pdf")
-        
+
         if os.path.exists(output_path):
             logger.info(f"PDF already exists: {output_path}")
             return output_path
-            
+
         try:
             import arxiv
+
             # Run the synchronous arxiv client in a thread pool so we don't block the async loop
             import asyncio
+
             loop = asyncio.get_running_loop()
-            
+
             def _fetch_arxiv():
                 client = arxiv.Client()
                 search = arxiv.Search(id_list=[arxiv_id])
@@ -217,22 +226,24 @@ async def download_pdf(url: str, output_dir: str = "papers") -> str:
                 # Download to the output_dir
                 paper.download_pdf(dirpath=output_dir, filename=f"{arxiv_id}.pdf")
                 return output_path
-                
+
             return await loop.run_in_executor(None, _fetch_arxiv)
-            
+
         except Exception as e:
             logger.error(f"ArXiv PDF download error for {arxiv_id}: {e}")
             # Fall through to generic grab if arxiv package fails for some reason
-            
+
     # Generic download for non-ArXiv (or if ArXiv package failed)
     filename = url.split("/")[-1]
     if "?" in filename:
         filename = filename.split("?")[0]
     if not filename.endswith(".pdf"):
         filename += ".pdf"
-        
+
     # sanitize filename
-    filename = "".join(c for c in filename if c.isalnum() or c in ('-', '_', '.')).rstrip()
+    filename = "".join(
+        c for c in filename if c.isalnum() or c in ("-", "_", ".")
+    ).rstrip()
 
     output_path = os.path.join(output_dir, filename)
 
@@ -243,8 +254,12 @@ async def download_pdf(url: str, output_dir: str = "papers") -> str:
     try:
         async with aiohttp.ClientSession() as session:
             # We add a common user agent to prevent basic 403s on landing pages
-            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-            async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=60)) as resp:
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            }
+            async with session.get(
+                url, headers=headers, timeout=aiohttp.ClientTimeout(total=60)
+            ) as resp:
                 if resp.status == 200:
                     with open(output_path, "wb") as f:
                         f.write(await resp.read())
@@ -257,4 +272,3 @@ async def download_pdf(url: str, output_dir: str = "papers") -> str:
         return ""
 
     return output_path
-
