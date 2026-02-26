@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 ENTITY_TYPES = {"concept", "method", "result", "dataset"}
 
 RELATION_PATTERNS = [
-    # (regex_pattern, relation_type, subject_group, object_group)
+    # (regex_pattern, relation_type)
     (r"(\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\b)\s+(?:uses?|utiliz\w+|employ\w+)\s+(.*?)(?:\.|,|$)", "USES"),
     (r"(\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\b)\s+(?:achiev\w+|obtain\w+|reach\w+)\s+(.*?)(?:\.|,|$)", "ACHIEVES"),
     (r"(\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\b)\s+(?:extend\w*|build\w*\s+(?:on|upon))\s+(.*?)(?:\.|,|$)", "EXTENDS"),
@@ -149,8 +149,12 @@ def _persist_to_neo4j(
 
         with driver.session() as session:
             # Merge entities as nodes (dedup by text+label)
+            # Allowed labels to prevent Cypher injection
+            allowed_labels = {"Concept", "Method", "Result", "Dataset"}
             for ent in entities:
                 label = ent["label"].capitalize()
+                if label not in allowed_labels:
+                    label = "Concept"
                 session.run(
                     f"MERGE (e:{label} {{text: $text}}) "
                     f"ON CREATE SET e.entity_id = $eid, e.paper_ids = $pids "
@@ -162,7 +166,10 @@ def _persist_to_neo4j(
                 nodes_created += 1
 
             # Create relationships
+            allowed_rels = {"USES", "ACHIEVES", "EXTENDS", "EVALUATED_ON"}
             for subj, rel_type, obj in relations:
+                if rel_type not in allowed_rels:
+                    continue
                 session.run(
                     "MATCH (a {text: $subj}), (b {text: $obj}) "
                     f"MERGE (a)-[r:{rel_type}]->(b) "
@@ -187,7 +194,7 @@ def _persist_to_neo4j(
 
 
 # ---------------------------------------------------------------------------
-# Qdrant + Word2Vec vector embedding
+# Qdrant + SentenceTransformers vector embedding
 # ---------------------------------------------------------------------------
 
 def _embed_and_store_qdrant(
@@ -195,7 +202,8 @@ def _embed_and_store_qdrant(
     vector_size: int = 384,
 ) -> Dict[str, Any]:
     """
-    Train Word2Vec on entity texts, embed them, and upsert to Qdrant.
+    Embed entity texts using SentenceTransformers (BAAI/bge-small-en-v1.5)
+    and upsert to Qdrant for semantic similarity search.
     Uses in-memory Qdrant when no QDRANT_URL is set.
     """
     if not entities:
@@ -246,14 +254,16 @@ def _embed_and_store_qdrant(
             client = QdrantClient(location=":memory:")
             logger.info("Using in-memory Qdrant (set QDRANT_URL for persistent storage)")
 
-        # Recreate collection
-        client.recreate_collection(
-            collection_name=collection_name,
-            vectors_config=models.VectorParams(
-                size=vector_size,
-                distance=models.Distance.COSINE,
-            ),
-        )
+        # Create collection if it doesn't exist (preserve existing data)
+        collections = [c.name for c in client.get_collections().collections]
+        if collection_name not in collections:
+            client.create_collection(
+                collection_name=collection_name,
+                vectors_config=models.VectorParams(
+                    size=vector_size,
+                    distance=models.Distance.COSINE,
+                ),
+            )
 
         # Upsert in batches
         batch_size = 100
@@ -388,13 +398,14 @@ async def knowledge_graph_node(
     # ---- Phase 2: Persist to Neo4j ----
     neo4j_result = _persist_to_neo4j(all_entities, all_relations)
 
-    # ---- Phase 3: Embed in Qdrant via Word2Vec ----
+    # ---- Phase 3: Embed in Qdrant via SentenceTransformers ----
     qdrant_result = _embed_and_store_qdrant(all_entities)
 
     # ---- Phase 4: Export graph JSON ----
     graph_path = _export_graph_json(all_entities, all_relations)
 
     # ---- Build summary ----
+    graph_id = f"kg_{state.get('project_id', 'unknown')}_{len(all_entities)}"
     summary = {
         "entities_extracted": len(all_entities),
         "relations_extracted": len(all_relations),
@@ -419,6 +430,7 @@ async def knowledge_graph_node(
     return {
         "current_node": "knowledge_graph",
         "knowledge_entities": all_entities,
+        "knowledge_graph_id": graph_id,
         "knowledge_graph_summary": summary,
         "audit_log": audit_log,
     }
