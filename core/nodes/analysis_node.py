@@ -90,6 +90,5 @@ async def analysis_node(
     return {
         "current_node": "analysis",
         "analysis_results": results,
-        "papers_included": len(included),
         "audit_log": audit_log,
     }

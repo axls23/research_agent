@@ -147,7 +147,8 @@ class GroqProvider(LLMProvider):
         # Strip markdown fences if the model wraps output
         cleaned = raw.strip()
         if cleaned.startswith("```"):
-            cleaned = cleaned.split("\n", 1)[1]
+            lines = cleaned.split("\n", 1)
+            cleaned = lines[1] if len(lines) > 1 else cleaned[3:]
             if cleaned.endswith("```"):
                 cleaned = cleaned[:-3]
         return schema.model_validate_json(cleaned)

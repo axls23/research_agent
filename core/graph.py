@@ -46,12 +46,16 @@ def _route_after_human(state: ResearchState) -> str:
     After human_intervention_node runs, decide next step:
     - If abort → go to audit_formatter (exit cleanly)
     - If override → continue to next node
-    - If retry → the node retried will be set by returning the
-      previous node name; for simplicity we re-enter the same stage
+    - If retry → re-run the previous stage via its validation gate
     """
     if state.get("abort", False):
         return "abort"
-    # override or retry both continue (retry would need more complex logic)
+    decision = ""
+    decisions = state.get("human_decisions", [])
+    if decisions:
+        decision = decisions[-1].get("decision", "")
+    if decision == "retry":
+        return "retry"
     return "continue"
 
 
@@ -129,6 +133,7 @@ def build_research_graph(
             _route_after_human,
             {
                 "continue": "data_processing",
+                "retry": "literature_review",
                 "abort": "audit_formatter",
             },
         )
@@ -148,6 +153,7 @@ def build_research_graph(
             _route_after_human,
             {
                 "continue": "knowledge_graph",
+                "retry": "data_processing",
                 "abort": "audit_formatter",
             },
         )
@@ -170,6 +176,7 @@ def build_research_graph(
             _route_after_human,
             {
                 "continue": "writing",
+                "retry": "analysis",
                 "abort": "audit_formatter",
             },
         )

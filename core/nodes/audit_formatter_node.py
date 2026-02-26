@@ -149,7 +149,7 @@ async def audit_formatter_node(
     # ---- Export audit log ----
     export_path = os.path.join(
         output_dir,
-        f"audit_log_{state.get('project_id', 'unknown')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+        f"audit_log_{state.get('project_id', 'unknown')}_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.json",
     )
 
     audit_data = {
