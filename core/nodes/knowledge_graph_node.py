@@ -255,9 +255,8 @@ def _embed_and_store_qdrant(
             logger.info("Using in-memory Qdrant (set QDRANT_URL for persistent storage)")
 
         # Create collection if it doesn't exist (preserve existing data)
-        try:
-            client.get_collection(collection_name=collection_name)
-        except Exception:
+        collections = [c.name for c in client.get_collections().collections]
+        if collection_name not in collections:
             client.create_collection(
                 collection_name=collection_name,
                 vectors_config=models.VectorParams(

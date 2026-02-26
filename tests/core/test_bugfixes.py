@@ -129,9 +129,11 @@ class TestKnowledgeGraphNodeOutput:
         from core.nodes.knowledge_graph_node import knowledge_graph_node
 
         state = make_initial_state("p1", "P", "topic", ["g1"])
-        result = asyncio.get_event_loop().run_until_complete(
-            knowledge_graph_node(state)
-        )
+        loop = asyncio.new_event_loop()
+        try:
+            result = loop.run_until_complete(knowledge_graph_node(state))
+        finally:
+            loop.close()
         assert "audit_log" in result
         assert result["current_node"] == "knowledge_graph"
 
@@ -149,9 +151,11 @@ class TestAnalysisNodeOutput:
 
         state = make_initial_state("p1", "P", "topic", ["g1"])
         state["papers_included"] = 42  # Set by data_processing
-        result = asyncio.get_event_loop().run_until_complete(
-            analysis_node(state)
-        )
+        loop = asyncio.new_event_loop()
+        try:
+            result = loop.run_until_complete(analysis_node(state))
+        finally:
+            loop.close()
         assert "papers_included" not in result
 
 

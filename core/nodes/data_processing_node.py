@@ -7,6 +7,7 @@ and chunks documents for downstream analysis.
 
 from __future__ import annotations
 
+import copy
 import logging
 from typing import Any, Dict
 
@@ -36,7 +37,7 @@ async def data_processing_node(
     config = config or {}
     use_mistral = config.get("configurable", {}).get("use_mistral_ocr", True)
 
-    papers = [dict(p) for p in state.get("papers", [])]
+    papers = [copy.deepcopy(p) for p in state.get("papers", [])]
     all_chunks: list = list(state.get("chunks", []))
     total_tokens = state.get("total_tokens_extracted", 0)
     extracted_count = 0
