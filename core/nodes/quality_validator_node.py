@@ -68,6 +68,7 @@ async def quality_validator_node(
     llm = cfgr.get("llm_fast") or cfgr.get("llm")  # prefer fast tier
 
     current = state.get("current_node", "")
+    explicit_gate_name = state.get("current_gate_name")
 
     # Map the current node to a gate name
     gate_map = {
@@ -75,10 +76,21 @@ async def quality_validator_node(
         "data_processing": "post_data_processing",
         "analysis": "post_analysis",
     }
-    gate_name = gate_map.get(current, f"post_{current}")
+    gate_name = explicit_gate_name or gate_map.get(current, f"post_{current}")
+
+    gate_to_failed_stage = {
+        "post_literature_review": "literature_review",
+        "post_data_processing": "data_processing",
+        "post_analysis": "analysis",
+    }
 
     # ---- Step 1: Rule-based validation ----
     report = run_validation_gate(state, gate_name)
+    last_failed_node = (
+        None
+        if report["passed"]
+        else gate_to_failed_stage.get(gate_name, current or None)
+    )
     report_dict = dict(report)
 
     # ---- Step 2: LLM self-critique  ----
@@ -122,7 +134,9 @@ async def quality_validator_node(
     )
 
     return {
+        "current_gate_name": gate_name,
         "last_validation_passed": report["passed"],
+        "last_failed_node": last_failed_node,
         "validation_reports": reports,
         "audit_log": audit_log,
     }

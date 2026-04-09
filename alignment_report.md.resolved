@@ -1,0 +1,30 @@
+# NEXUS System Alignment & Diversion Report
+
+## 1. Security & Infrastructure (Critical Violation)
+* **Intended:** 100% On-Premise, SOC2 Compliant, zero public cloud reliance due to proprietary R&D IP.
+* **Current:** Highly reliant on public cloud services. Uses **Groq API** (public LLM), **Qdrant Cloud**, and **Neo4j Aura** (managed cloud graph). 
+* **Alignment Flag:** 🚨 **CRITICAL DIVERSION**. Enterprise clients cannot use the current system for unpatented dark data.
+
+## 2. Target Audience & Core Domain
+* **Intended:** Enterprise DeepTech R&D (Hardware, Bio, Aerospace). Solves "Dark Data Crisis" by bridging corporate departmental silos.
+* **Current:** Academic Research Assistant. Uses PRISMA/Cochrane methodologies, ArXiv/PubMed literature reviews, and constructs structured academic papers.
+* **Alignment Flag:** 🚨 **MAJOR STRATEGIC DIVERSION**. The system is building a literature review tool, not an enterprise isomorphic mapping engine.
+
+## 3. Algorithmic Architecture (The Engine)
+* **Intended:** 3-Layer System (Jargon Translation Engine, GNN-powered Cross-Silo Vector Graph, Interactive Simulation Sandbox).
+* **Current:** Linear LangGraph pipeline (Literature Review ➡️ Data Processing ➡️ Knowledge Graph ➡️ Analysis ➡️ Writing). 
+* **Alignment Flag:** 🚨 **ARCHITECTURAL DIVERSION**. The "Rosetta Core" (Jargon Translation) and the "Concept Canvas" (Simulation Sandbox) do not exist. The current Knowledge Graph only extracts academic entities, completely lacking Graph Neural Networks (GNNs) for cross-silo matching.
+
+## 4. Input & Output Mechanisms
+* **Intended:** Ingests multimodal "Dark Data" (CAD files, genomic sequences, logs); outputs physical simulation mappings and alerts (e.g., averting redundant $1.5M research).
+* **Current:** Ingests academic PDFs and outputs markdown research drafts and audit flow diagrams.
+* **Alignment Flag:** ⚠️ **SCOPE DIVERSION**. Lacks connectors for enterprise datasets and output actionability beyond text synthesis.
+
+---
+
+### Remediation Path to Restore NEXUS Vision
+
+If the goal is to pivot back to the NEXUS Enterprise Vision, the immediate architectural changes required are:
+1. **Air-gap the system**: Rip out `Groq`, `Qdrant Cloud`, and `Neo4j Aura`. Replace with local `vLLM`/`Ollama`, local Docker Qdrant, and local Neo4j.
+2. **Gut the Academic Pipeline**: Remove `LiteratureReviewAgent` (ArXiv scraping) and replace it with a `DarkDataIngestionAgent` (parsing internal CSVs/PDFs).
+3. **Build the Rosetta Core**: Shift the LLM objective from "summarizing papers" to "abstracting domains to core principles" (Jargon Translation).

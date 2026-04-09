@@ -11,14 +11,19 @@ Supports:
 """
 
 from __future__ import annotations
-
 import json
 import logging
 import os
+import yaml
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Type, Union
+from pydantic import BaseModel, Field
 
-from pydantic import BaseModel
+from langchain_core.messages import BaseMessage, AIMessage, HumanMessage, SystemMessage
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.outputs import ChatResult, ChatGeneration
+
+from core.reasoning import NativeReasoningLoop
 
 logger = logging.getLogger(__name__)
 
@@ -261,22 +266,43 @@ class MistralProvider(LLMProvider):
 
 
 # ---------------------------------------------------------------------------
-# Ollama Provider (local fallback)
+# AirLLM Provider (local fallback for large models)
 # ---------------------------------------------------------------------------
 
 
-class OllamaProvider(LLMProvider):
-    """Local LLM via Ollama — works offline, no API keys."""
+class AirLLMProvider(LLMProvider):
+    """Local LLM via AirLLM — allows running 70B models on 8GB VRAM."""
 
     def __init__(
         self,
-        model: str = "llama3.1:8b",
-        base_url: str = "http://localhost:11434",
+        model: str = "meta-llama/Meta-Llama-3.1-70B-Instruct",
         **kwargs: Any,
     ):
         self.model = model
-        self.base_url = base_url
         self._kwargs = kwargs
+        self._model_instance = None
+        self._tokenizer = None
+
+    def _get_model(self):
+        if self._model_instance is None:
+            from airllm import AutoModel
+            import transformers
+            # For Qwen and newer models, AirLLM requires setting profiling and max length explicitly
+            kwargs = self._kwargs.copy()
+            if "max_seq_len" not in kwargs:
+                kwargs["max_seq_len"] = 512
+            if "compression" not in kwargs:
+                kwargs["compression"] = "4bit" # Huge speedup for disk reads
+            
+            self._model_instance = AutoModel.from_pretrained(
+                self.model,
+                **kwargs
+            )
+            self._tokenizer = transformers.AutoTokenizer.from_pretrained(
+                self.model, 
+                trust_remote_code=True
+            )
+        return self._model_instance, self._tokenizer
 
     async def generate(
         self,
@@ -287,22 +313,204 @@ class OllamaProvider(LLMProvider):
         max_tokens: int = 4096,
         **kwargs: Any,
     ) -> str:
-        from langchain_ollama import ChatOllama
-        from langchain_core.messages import HumanMessage, SystemMessage
-
-        chat = ChatOllama(
-            model=self.model,
-            base_url=self.base_url,
-            temperature=temperature,
-            num_predict=max_tokens,
+        # Note: AirLLM is memory optimized but slow and runs synchronously.
+        # Run in a separate thread if non-blocking is required.
+        model, tokenizer = self._get_model()
+        
+        # Manually assemble prompt to avoid chat_template mismatching positions
+        full_prompt = ""
+        if system_prompt:
+            full_prompt += f"<|im_start|>system\n{system_prompt}<|im_end|>\n"
+        full_prompt += f"<|im_start|>user\n{prompt}<|im_end|>\n<|im_start|>assistant\n"
+        
+        # Max seq len handled explicitly to prevent rotary embedding dimension mismatches
+        max_seq_len = self._kwargs.get("max_seq_len", 512)
+        input_tokens = tokenizer(
+            full_prompt, 
+            return_tensors="pt", 
+            return_attention_mask=False, 
+            truncation=True, 
+            max_length=max_seq_len - 100 # leave space for generation
         )
+        
+        import torch
+        # Move to CUDA if available, required by AirLLM tensor sharding
+        input_ids = input_tokens['input_ids'].cuda() if torch.cuda.is_available() else input_tokens['input_ids']
+        
+        # AirLLM generate
+        generation_output = model.generate(
+            input_ids,
+            max_new_tokens=min(max_tokens, 100), # Cap for safety in airllm loop
+            use_cache=True,
+            return_dict_in_generate=True
+        )
+        
+        # Decode only the newly generated tokens
+        output = tokenizer.decode(generation_output.sequences[0][input_tokens['input_ids'].shape[1]:], skip_special_tokens=True)
+        return output
+
+    async def generate_structured(
+        self,
+        prompt: str,
+        schema: Type[BaseModel],
+        *,
+        system_prompt: Optional[str] = None,
+        temperature: float = 0.3,
+        **kwargs: Any,
+    ) -> BaseModel:
+        raw = await self.generate(
+            prompt,
+            system_prompt=(
+                (system_prompt or "")
+                + f"\n\nRespond ONLY with valid JSON matching this schema:\n"
+                f"{json.dumps(schema.model_json_schema(), indent=2)}"
+            ),
+            temperature=temperature,
+            **kwargs,
+        )
+        # Strip markdown fences
+        cleaned = raw.strip()
+        if cleaned.startswith("```"):
+            cleaned = cleaned.split("\n", 1)[1]
+            if cleaned.endswith("```"):
+                cleaned = cleaned[:-3]
+        return schema.model_validate_json(cleaned)
+
+# ---------------------------------------------------------------------------
+# FastRLM Provider (local models via fast-rlm)
+# ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Native LangChain Provider for Fast-RLM
+# ---------------------------------------------------------------------------
+
+class ChatFastRLM(BaseChatModel):
+    """
+    A custom LangChain chat model that implements a native reasoning loop.
+    Replaces the external Deno-based fast-rlm dependency.
+    """
+    model_name: str = Field(default="primary")
+    temperature: float = 0.7
+    max_depth: int = 3
+    
+    @property
+    def _llm_type(self) -> str:
+        return "fast-rlm-native-v2"
+
+    def _convert_messages_to_prompt(self, messages: List[BaseMessage]) -> str:
+        prompt = ""
+        for m in messages:
+            if isinstance(m, SystemMessage):
+                prompt += f"System: {m.content}\n\n"
+            elif isinstance(m, HumanMessage):
+                prompt += f"User: {m.content}\n"
+            elif isinstance(m, AIMessage):
+                prompt += f"Assistant: {m.content}\n"
+            else:
+                prompt += f"{m.type}: {m.content}\n"
+        return prompt
+
+    def _generate(
+        self,
+        messages: List[BaseMessage],
+        stop: Optional[List[str]] = None,
+        run_manager: Optional[Any] = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        import asyncio
+        import nest_asyncio
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+        if loop.is_running():
+            nest_asyncio.apply()
+            
+        return loop.run_until_complete(self._agenerate(messages, stop, run_manager, **kwargs))
+
+    async def _agenerate(
+        self,
+        messages: List[BaseMessage],
+        stop: Optional[List[str]] = None,
+        run_manager: Optional[Any] = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        
+        prompt = self._convert_messages_to_prompt(messages)
+        
+        # Determine the base address for vLLM
+        vllm_base = os.getenv("RLM_MODEL_BASE_URL", "http://172.30.177.136:8000/v1")
+        primary_model = os.getenv("RLM_PRIMARY_MODEL", "Qwen/Qwen2.5-1.5B-Instruct")
+        
+        # Instantiate the base LLM for the reasoning loop (directly to vLLM)
+        base_llm = ChatOpenAI(
+            model=primary_model,
+            base_url=vllm_base,
+            api_key="dummy",
+            temperature=self.temperature
+        )
+        
+        # We split the prompt into 'Context' and 'Query' if possible to help the loop
+        context_data = ""
+        query = prompt
+        if "Context:" in prompt and "Query:" in prompt:
+            parts = prompt.split("Query:", 1)
+            context_data = parts[0].replace("Context:", "").strip()
+            query = parts[1].strip()
+        elif "Context:" in prompt:
+            parts = prompt.split("Context:", 1)
+            # Find the next newline or separator?
+            # For simplicity, we'll just treat the whole thing as query if unsure
+            pass
+
+        reasoning_loop = NativeReasoningLoop(
+            llm=base_llm, 
+            max_depth=self.max_depth,
+            model_name=self.model_name
+        )
+        
+        result = await reasoning_loop.run(query=query, context_data=context_data)
+        
+        message = AIMessage(content=str(result))
+        return ChatResult(generations=[ChatGeneration(message=message)])
+
+
+class FastRLMProvider(LLMProvider):
+    """
+    Wrapper for ChatFastRLM to satisfy the internal LLMProvider interface.
+    Used for RAG nodes and legacy logic that expects .generate().
+    """
+    def __init__(self, model: str = "primary", **kwargs: Any):
+        self.model = ChatFastRLM(model_name=model, **kwargs)
+
+    async def generate(self, prompt: str, system_prompt: Optional[str] = None, **kwargs: Any) -> str:
         messages = []
         if system_prompt:
             messages.append(SystemMessage(content=system_prompt))
         messages.append(HumanMessage(content=prompt))
-
-        result = await chat.ainvoke(messages)
+        
+        result = await self.model.ainvoke(messages, **kwargs)
         return result.content
+
+    async def generate_structured(self, prompt: str, schema: Type[BaseModel], system_prompt: Optional[str] = None, **kwargs: Any) -> BaseModel:
+        raw = await self.generate(
+            prompt,
+            system_prompt=(
+                (system_prompt or "")
+                + f"\n\nRespond ONLY with valid JSON matching this schema:\n"
+                f"{json.dumps(schema.model_json_schema(), indent=2)}"
+            ),
+            **kwargs
+        )
+        cleaned = raw.strip()
+        if cleaned.startswith("```"):
+            cleaned = cleaned.split("\n", 1)[1]
+            if cleaned.endswith("```"):
+                cleaned = cleaned[:-3]
+        return schema.model_validate_json(cleaned)
 
 
 # ---------------------------------------------------------------------------
@@ -323,7 +531,8 @@ def create_llm_provider(
 
         llm = create_llm_provider("groq", model="llama-3.1-8b-instant")
         llm = create_llm_provider("mistral")
-        llm = create_llm_provider("ollama", model="llama3.1:8b")
+        llm = create_llm_provider("airllm", model="meta-llama/Meta-Llama-3.1-70B-Instruct")
+        llm = create_llm_provider("fast_rlm", model="primary")
     """
     provider = provider.lower()
 
@@ -331,11 +540,29 @@ def create_llm_provider(
         return GroqProvider(model=model or "llama-3.1-8b-instant", **kwargs)
     elif provider == "mistral":
         return MistralProvider(model=model or "mistral-small-latest", **kwargs)
-    elif provider == "ollama":
-        return OllamaProvider(model=model or "llama3.1:8b", **kwargs)
+    elif provider == "airllm":
+        return AirLLMProvider(model=model or "meta-llama/Meta-Llama-3.1-70B-Instruct", **kwargs)
+    elif provider == "fast_rlm":
+        return FastRLMProvider(model=model or "primary", **kwargs)
+    elif provider == "openai":
+        from langchain_openai import ChatOpenAI
+        
+        # Point to local vLLM if OPENAI_API_BASE is set, default to vLLM's local port
+        base_url = os.environ.get("OPENAI_API_BASE", "http://localhost:8000/v1")
+        # Langchain requires ChatOpenAI to be wrapped in an interface that matches LLMProvider
+        # We can hijack GroqProvider's struct since it uses standard Langchain Chat Models
+        class OpenAIProvider(GroqProvider):
+            def _get_chat_model(self):
+                return ChatOpenAI(
+                    model=self.model,
+                    api_key=os.environ.get("OPENAI_API_KEY", "vllm-dummy-key"),
+                    base_url=base_url,
+                    **self._kwargs
+                )
+        return OpenAIProvider(model=model or "Qwen/Qwen2.5-7B-Instruct", **kwargs)
     else:
         raise ValueError(
-            f"Unknown LLM provider: {provider!r}. " f"Supported: groq, mistral, ollama"
+            f"Unknown LLM provider: {provider!r}. " f"Supported: groq, mistral, airllm, fast_rlm, openai"
         )
 
 

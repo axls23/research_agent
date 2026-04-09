@@ -27,11 +27,11 @@ logger = logging.getLogger(__name__)
 
 async def search_literature(
     topic: str,
-    research_goals: List[str],
-    min_year: int = 2015,
-    max_results_per_db: int = 30,
-    snowball: bool = True,
-) -> Dict[str, Any]:
+    research_goals: list[str],
+    min_year: str = "2015",
+    max_results_per_db: str = "5",
+    snowball: str = "true",
+) -> dict:
     """Search academic databases for papers relevant to a research topic.
 
     Uses PICO decomposition to formulate boolean queries, searches
@@ -58,7 +58,7 @@ async def search_literature(
             "action": "formulate_search_query",
             "topic": topic,
             "research_goals": research_goals,
-            "min_year": min_year,
+            "min_year": int(min_year),
         }
     )
 
@@ -67,8 +67,8 @@ async def search_literature(
         {
             "action": "retrieve_papers",
             "queries": query_result.get("queries", [topic]),
-            "max_results_per_db": max_results_per_db,
-            "snowball": snowball,
+            "max_results_per_db": int(max_results_per_db),
+            "snowball": snowball.lower() == "true",
         }
     )
 
@@ -79,7 +79,7 @@ async def search_literature(
             "papers": retrieval_result.get("papers", []),
             "topic": topic,
             "research_goals": research_goals,
-            "min_year": min_year,
+            "min_year": int(min_year),
         }
     )
 
@@ -105,10 +105,10 @@ async def search_literature(
 
 
 async def process_documents(
-    papers: List[Dict[str, Any]],
-    chunk_size: int = 1000,
-    chunk_overlap: int = 200,
-) -> Dict[str, Any]:
+    papers: list[dict],
+    chunk_size: str = "1000",
+    chunk_overlap: str = "200",
+) -> dict:
     """Process research papers into text chunks for downstream analysis.
 
     Extracts text from PDF documents, cleans and normalises content,
@@ -149,9 +149,9 @@ async def process_documents(
 
 
 async def extract_prisma_knowledge(
-    chunks: List[Dict[str, Any]],
-    llm: Any = None,
-) -> Dict[str, Any]:
+    chunks: list[dict],
+    llm: Optional[str] = None,
+) -> dict:
     """Extract PRISMA-aligned knowledge entities from text chunks.
 
     Runs a 2-tier extraction pipeline:
@@ -209,8 +209,8 @@ async def extract_prisma_knowledge(
 def qdrant_search(
     query: str,
     prisma_label: Optional[str] = None,
-    limit: int = 10,
-) -> List[Dict[str, Any]]:
+    limit: str = "10",
+) -> list[dict]:
     """Search Qdrant for semantically similar PRISMA entities.
 
     Embeds the query using BAAI/bge-small-en-v1.5 and searches the
@@ -257,7 +257,7 @@ def qdrant_search(
             collection_name="research_entities",
             query=query_vector,
             query_filter=search_filter,
-            limit=limit,
+            limit=int(limit),
         )
 
         return [
@@ -283,8 +283,8 @@ def qdrant_search(
 
 def neo4j_query(
     cypher: str,
-    params: Optional[Dict[str, Any]] = None,
-) -> List[Dict[str, Any]]:
+    params: Optional[dict] = None,
+) -> list[dict]:
     """Execute a Cypher query against the Neo4j PRISMA knowledge graph.
 
     Use this to traverse the PRISMA ontology and find reasoning paths.
@@ -332,11 +332,11 @@ def neo4j_query(
 
 
 async def analyze_evidence(
-    entities: List[Dict[str, Any]],
+    entities: list[dict],
     topic: str,
-    papers: Optional[List[Dict[str, Any]]] = None,
-    llm: Any = None,
-) -> Dict[str, Any]:
+    papers: Optional[list[dict]] = None,
+    llm: Optional[str] = None,
+) -> dict:
     """Analyze extracted knowledge entities to find patterns and synthesize.
 
     Runs descriptive statistics, LLM-based synthesis with extended
@@ -382,10 +382,10 @@ async def analyze_evidence(
 async def draft_section(
     topic: str,
     section_name: str = "literature_review",
-    entities: Optional[List[Dict[str, Any]]] = None,
-    analysis_results: Optional[List[Dict[str, Any]]] = None,
-    llm: Any = None,
-) -> Dict[str, Any]:
+    entities: Optional[list[dict]] = None,
+    analysis_results: Optional[list[dict]] = None,
+    llm: Optional[str] = None,
+) -> dict:
     """Draft an academic section using extracted knowledge and analysis.
 
     Generates outlines, drafts key sections (Introduction, Literature
@@ -437,8 +437,8 @@ async def draft_section(
 
 async def validate_quality(
     stage: str,
-    state_snapshot: Dict[str, Any],
-) -> Dict[str, Any]:
+    state_snapshot: dict,
+) -> dict:
     """Run quality validation on pipeline output at a given stage.
 
     Checks whether the pipeline output meets quality thresholds
@@ -468,6 +468,39 @@ async def validate_quality(
 
 
 # ---------------------------------------------------------------------------
+# Skill Reading Tool
+# ---------------------------------------------------------------------------
+
+
+def read_skill(skill_name: str) -> str:
+    """Read the instructions for a specific NEXUS or system skill.
+
+    Use this tool when you need to understand the formal rules, ontology,
+    or expected formats for a particular domain before writing queries or code.
+    For example, reading 'nexus-neo4j-mapper' before writing Cypher queries.
+
+    Args:
+        skill_name: The name of the skill (e.g., 'nexus-neo4j-mapper').
+
+    Returns:
+        The markdown text containing the exact rules and instructions for the skill.
+    """
+    skill_path = os.path.join(
+        os.path.dirname(__file__), "..", ".agents", "skills", skill_name, "SKILL.md"
+    )
+    
+    try:
+        if os.path.exists(skill_path):
+            with open(skill_path, "r", encoding="utf-8") as f:
+                return f.read()
+        else:
+            return f"Skill '{skill_name}' not found at {skill_path}. Cannot load rules."
+    except Exception as e:
+        logger.error(f"Failed to read skill '{skill_name}': {e}")
+        return f"Error reading skill: {e}"
+
+
+# ---------------------------------------------------------------------------
 # Registry for Deep Agents
 # ---------------------------------------------------------------------------
 
@@ -475,6 +508,7 @@ async def validate_quality(
 SYNC_TOOLS = [
     qdrant_search,
     neo4j_query,
+    read_skill,
 ]
 
 # Async tools (need await)

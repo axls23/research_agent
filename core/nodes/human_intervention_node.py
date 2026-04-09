@@ -39,6 +39,7 @@ async def human_intervention_node(
     latest = reports[-1] if reports else {}
     failures = latest.get("failures", ["Unknown validation failure"])
     gate_name = latest.get("gate_name", "unknown")
+    retry_target = state.get("last_failed_node")
 
     # ---- Present to user ----
     print("\n" + "=" * 60)
@@ -99,6 +100,8 @@ async def human_intervention_node(
 
     return {
         "human_decisions": decisions,
+        "human_decision": decision,
+        "retry_target": retry_target if decision == "retry" else None,
         "abort": decision == "abort",
         "last_validation_passed": decision == "override",
         "audit_log": audit_log,

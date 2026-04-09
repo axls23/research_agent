@@ -40,6 +40,7 @@ logger = logging.getLogger(__name__)
 def _persist_to_neo4j(
     entities: List[Dict[str, Any]],
     relations: List[Tuple[str, str, str]],
+    hyperedges: List[Dict[str, Any]] = None,
     paper_id: str = "",
 ) -> Dict[str, Any]:
     """
@@ -131,10 +132,36 @@ def _persist_to_neo4j(
                     )
                     rels_created += 1
 
+            # Create Hyperedges
+            if hyperedges:
+                for he in hyperedges:
+                    # Create the central Hyperedge node
+                    session.run(
+                        "MERGE (h:Hyperedge {hyperedge_id: $hid}) "
+                        "ON CREATE SET h.principle_name = $pname, h.weight = $weight, h.paper_ids = $pids "
+                        "ON MATCH SET h.paper_ids = [x IN h.paper_ids + $pids WHERE x IS NOT NULL]",
+                        hid=he["hyperedge_id"],
+                        pname=he["principle_name"],
+                        weight=he["weight"],
+                        pids=he["paper_ids"]
+                    )
+                    nodes_created += 1
+
+                    # Connect members to it via IN_HYPEREDGE
+                    for member_id in he["member_entity_ids"]:
+                        session.run(
+                            "MATCH (h:Hyperedge {hyperedge_id: $hid}) "
+                            "MATCH (e {entity_id: $eid}) "
+                            "MERGE (e)-[r:IN_HYPEREDGE]->(h)",
+                            hid=he["hyperedge_id"],
+                            eid=member_id
+                        )
+                        rels_created += 1
+
         driver.close()
         logger.info(
-            f"Neo4j: created/merged {nodes_created} PRISMA nodes, "
-            f"{rels_created} relationships"
+            f"Neo4j: created/merged {nodes_created} PRISMA/NEXUS nodes, "
+            f"{rels_created} relationships/hyperedge-links"
         )
         return {
             "neo4j_status": "success",
@@ -339,6 +366,7 @@ async def knowledge_graph_node(
     chunks = state.get("chunks", [])
     all_entities: List[Dict[str, Any]] = []
     all_relations: List[Tuple[str, str, str]] = []
+    all_hyperedges: List[Dict[str, Any]] = []
 
     if not chunks:
         logger.warning("No chunks available for PRISMA knowledge extraction")
@@ -358,13 +386,14 @@ async def knowledge_graph_node(
         paper_id = chunk_data.get("paper_id", "")
 
         # Run 2-tier extraction pipeline
-        entities, relations = await extract_prisma_entities(text, paper_id, llm=llm)
+        entities, relations, hyperedges = await extract_prisma_entities(text, paper_id, llm=llm)
         all_entities.extend(entities)
         all_relations.extend(relations)
+        all_hyperedges.extend(hyperedges)
 
     logger.info(
-        f"Extracted {len(all_entities)} PRISMA entities and "
-        f"{len(all_relations)} relations from {sample_size} chunks"
+        f"Extracted {len(all_entities)} PRISMA entities, "
+        f"{len(all_relations)} relations, and {len(all_hyperedges)} hyperedges from {sample_size} chunks"
     )
 
     # ---- Phase 2: Persist to Neo4j (reasoning graph) ----
@@ -377,7 +406,8 @@ async def knowledge_graph_node(
     for pid in paper_ids:
         pid_entities = [e for e in all_entities if pid in e.get("paper_ids", [])]
         pid_relations = [r for r in all_relations if pid in str(r[0])]
-        result = _persist_to_neo4j(pid_entities, pid_relations, paper_id=pid)
+        pid_hyperedges = [h for h in all_hyperedges if pid in h.get("paper_ids", [])]
+        result = _persist_to_neo4j(pid_entities, pid_relations, hyperedges=pid_hyperedges, paper_id=pid)
         if result.get("neo4j_status") == "success":
             neo4j_result = result
 
@@ -409,7 +439,7 @@ async def knowledge_graph_node(
         inputs={"chunk_count": len(chunks), "sample_size": sample_size},
         output_summary=(
             f"PRISMA extraction: {len(all_entities)} entities, "
-            f"{len(all_relations)} relations. "
+            f"{len(all_relations)} relations, {len(all_hyperedges)} hyperedges. "
             f"Neo4j: {neo4j_result.get('neo4j_status')}. "
             f"Qdrant: {qdrant_result.get('qdrant_status')}."
         ),
@@ -418,6 +448,7 @@ async def knowledge_graph_node(
     return {
         "current_node": "knowledge_graph",
         "knowledge_entities": all_entities,
+        "hyperedges": all_hyperedges,
         "knowledge_graph_summary": summary,
         "audit_log": audit_log,
     }

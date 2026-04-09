@@ -62,7 +62,7 @@ async def literature_review_node(
         papers, dbs = await search_multiple_databases(
             query=query,
             databases=databases,
-            max_results_per_db=20,
+            max_results_per_db=3,
         )
         all_papers.extend(papers)
         all_dbs_searched.update(dbs)

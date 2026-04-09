@@ -61,12 +61,16 @@ async def main_async(args):
     logger.info(f"Running research pipeline on: '{topic}'")
 
     try:
+        # Map CLI modes to the pipeline's internal mode enum
+        internal_mode = "agentic" if args.mode == "agentic" else "deterministic"
+        
         result_state = await run_research_pipeline(
             project_name=project_name,
             research_topic=topic,
             research_goals=goals,
             rigor_level=args.rigor,
             interactive=False,  # Set to False so it doesn't wait indefinitely in tests
+            mode=internal_mode  # Pass the mapped mode to trigger the ReAct orchestrator
         )
 
         logger.info("[SUCCESS] Research Pipeline Completed!")
@@ -85,9 +89,9 @@ def main():
     parser.add_argument(
         "--mode",
         type=str,
-        choices=["default", "langgraph"],
-        default="langgraph",
-        help="Execution mode (default or langgraph).",
+        choices=["default", "langgraph", "agentic"],
+        default="agentic",
+        help="Execution mode (default, langgraph, or agentic).",
     )
     parser.add_argument(
         "--rigor",
@@ -120,12 +124,23 @@ def main():
     os.makedirs("outputs", exist_ok=True)
     os.makedirs("logs", exist_ok=True)
 
-    if args.mode == "langgraph":
+    import asyncio
+    if args.mode in ["langgraph", "agentic"]:
         asyncio.run(main_async(args))
     else:
         logger.info(
-            "Default mode selected, but API server is not available. Try --mode langgraph"
+            "Legacy mode selected: Routing via ResearchWorkflowOrchestrator to trigger custom agents."
         )
+        # Using the orchestrator directly exposes the agents instantiated inside
+        from core.orchestrator import ResearchWorkflowOrchestrator
+
+        async def run_legacy():
+            orchestrator = ResearchWorkflowOrchestrator({"citation_format": "apa"})
+            project_id = await orchestrator.start_research_project("Demo", "Testing Agents")
+            await orchestrator.start_research_workflow(project_id, "literature_review", {"topic": "Quantum Machine Learning"})
+            logger.info("Legacy pipeline initialization complete.")
+
+        asyncio.run(run_legacy())
 
 
 if __name__ == "__main__":

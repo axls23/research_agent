@@ -1,0 +1,17 @@
+--- dir(fast_rlm) ---
+['RLMConfig', '__all__', '__builtins__', '__cached__', '__doc__', '__file__', '__loader__', '__name__', '__package__', '__path__', '__spec__', '_runner', 'run']
+
+--- help(fast_rlm.run) ---
+Run a fast-rlm query.
+
+Args:
+    query: The question / context to process.
+    prefix: Optional log filename prefix.
+    config: RLMConfig object or dict of overrides (e.g. primary_agent, max_depth).
+    verbose: If True, stream deno stdout/stderr to terminal.
+
+Returns:
+    Dict with 'results', 'usage', and optionally 'log_file'.
+
+--- help(fast_rlm.RLMConfig) ---
+Configuration for fast-rlm.

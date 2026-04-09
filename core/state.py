@@ -85,15 +85,46 @@ class Chunk(TypedDict):
 class KnowledgeEntity(TypedDict):
     """A node in the knowledge graph.
 
-    Labels follow the PRISMA 2020 ontology:
-        paper, objective, methodology, result, limitation, implication
+    Labels follow the PRISMA 2020 ontology + NEXUS extensions:
+        paper, objective, methodology, result, limitation, implication, core_principle
     """
 
     entity_id: str
-    label: str  # "paper"|"objective"|"methodology"|"result"|"limitation"|"implication"
+    label: str  # "paper"|"objective"|"methodology"|"result"|"limitation"|"implication"|"core_principle"
     text: str
     paper_ids: List[str]
     prisma_properties: Optional[Dict[str, Any]]  # Label-dependent PRISMA metadata
+
+
+class Hyperedge(TypedDict):
+    """An n-ary relationship grouping multiple entities under one structural principle.
+
+    Unlike standard binary edges, a Hyperedge connects N nodes simultaneously.
+    In Neo4j this is simulated as a central Hyperedge node with IN_HYPEREDGE edges
+    to each member entity.
+    """
+
+    hyperedge_id: str
+    principle_name: str  # e.g. "Decentralized Resource Calling"
+    member_entity_ids: List[str]  # IDs of entities grouped by this principle
+    domain_jargon: List[str]  # Original domain terms that map to this principle
+    weight: float  # Confidence score (0-1)
+    paper_ids: List[str]  # Source papers
+
+
+class IsomorphicCluster(TypedDict):
+    """A detected cross-domain mapping between two or more Hyperedges.
+
+    When Hyperedges from different domains share the same abstract principle,
+    they form an Isomorphic Cluster — the core output of the NEXUS engine.
+    """
+
+    cluster_id: str
+    shared_principle: str  # The abstract principle that links the hyperedges
+    hyperedge_ids: List[str]  # IDs of matched Hyperedges
+    domains: List[str]  # e.g. ["Aerospace", "Earth Science"]
+    similarity_score: float  # Cosine similarity between hyperedge embeddings
+    actionable_insight: Optional[str]  # LLM-generated human-readable alert
 
 
 class AnalysisResult(TypedDict):
@@ -131,7 +162,12 @@ class ResearchState(TypedDict):
 
     # ---- Workflow control ----
     current_node: str  # Name of the node currently executing
+    current_gate_name: Optional[str]  # Explicit validation gate identity
     last_validation_passed: bool
+    human_decision: Optional[Literal["retry", "override", "abort"]]
+    last_failed_node: Optional[str]  # Stage that failed latest validation gate
+    retry_target: Optional[str]  # Node to jump to when human chooses retry
+    max_iterations_reached: bool  # Forced stop guard for eager runner
     abort: bool  # Set True by human_intervention to stop graph
 
     # ---- Literature Review ----
@@ -150,6 +186,10 @@ class ResearchState(TypedDict):
     knowledge_entities: List[KnowledgeEntity]
     knowledge_graph_id: Optional[str]
     knowledge_graph_summary: Optional[Dict[str, Any]]  # Neo4j/Qdrant stats
+
+    # ---- NEXUS Isomorphic Mapping (Hypergraph Layer) ----
+    hyperedges: List[Hyperedge]
+    isomorphic_clusters: List[IsomorphicCluster]
 
     # ---- Analysis ----
     analysis_results: List[AnalysisResult]
@@ -192,7 +232,12 @@ def make_initial_state(
         research_goals=research_goals,
         rigor_level=rigor_level,
         current_node="",
+        current_gate_name=None,
         last_validation_passed=True,
+        human_decision=None,
+        last_failed_node=None,
+        retry_target=None,
+        max_iterations_reached=False,
         abort=False,
         search_queries=[],
         databases_searched=[],
@@ -205,6 +250,8 @@ def make_initial_state(
         knowledge_entities=[],
         knowledge_graph_id=None,
         knowledge_graph_summary=None,
+        hyperedges=[],
+        isomorphic_clusters=[],
         analysis_results=[],
         outline=None,
         draft_sections={},
@@ -218,6 +265,37 @@ def make_initial_state(
         prisma_flow_diagram=None,
         audit_export_path=None,
     )
+
+
+def merge_hyperedges(
+    existing: List[Hyperedge],
+    new: List[Hyperedge],
+) -> List[Hyperedge]:
+    """LangGraph reducer: merge Hyperedge lists without duplicates.
+
+    If two hyperedges share the same ``principle_name``, their member
+    entity IDs and paper IDs are unioned and the weight is averaged.
+    """
+    index: Dict[str, Hyperedge] = {h["principle_name"]: dict(h) for h in existing}  # type: ignore[misc]
+
+    for h in new:
+        key = h["principle_name"]
+        if key in index:
+            merged = index[key]
+            merged["member_entity_ids"] = list(
+                set(merged["member_entity_ids"]) | set(h["member_entity_ids"])
+            )
+            merged["paper_ids"] = list(
+                set(merged["paper_ids"]) | set(h["paper_ids"])
+            )
+            merged["domain_jargon"] = list(
+                set(merged["domain_jargon"]) | set(h["domain_jargon"])
+            )
+            merged["weight"] = (merged["weight"] + h["weight"]) / 2.0
+        else:
+            index[key] = dict(h)  # type: ignore[misc]
+
+    return list(index.values())  # type: ignore[return-value]
 
 
 def append_audit(

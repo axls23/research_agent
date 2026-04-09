@@ -1,5 +1,5 @@
 """
-core/graph.py
+core/graph.py - Eager Edition
 =============
 LangGraph StateGraph builder — compiles the full research pipeline
 with validation gates, human-in-the-loop, and conditional routing.
@@ -54,9 +54,11 @@ def _route_after_human(state: ResearchState) -> str:
     - If retry → the node retried will be set by returning the
       previous node name; for simplicity we re-enter the same stage
     """
-    if state.get("abort", False):
+    decision = state.get("human_decision")
+    if decision == "abort" or state.get("abort", False):
         return "abort"
-    # override or retry both continue (retry would need more complex logic)
+    if decision == "retry":
+        return "retry"
     return "continue"
 
 
@@ -81,143 +83,197 @@ def _route_after_writing(state: ResearchState) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Graph Builder
+# Eager Graph Runner (Immediate Execution)
+# ---------------------------------------------------------------------------
+
+
+class EagerGraphRunner:
+    """
+    Simulates a LangGraph CompiledGraph but executes nodes immediately (eagerly).
+    This bypasses LangGraph's black-box executor for better debugging and
+    more flexible state management.
+    """
+
+    def __init__(self, nodes: Dict[str, Any], entry_point: str, rigor_level: str):
+        self.nodes = nodes
+        self.entry_point = entry_point
+        self.rigor_level = rigor_level
+
+    async def ainvoke(self, state: ResearchState, config: Dict[str, Any]) -> ResearchState:
+        """Asynchronously run the graph eagerly."""
+        logger.info(f"Starting EAGER execution loop from '{self.entry_point}'")
+        config = config or {}
+        cfgr = config.get("configurable", {})
+        max_iterations = int(cfgr.get("max_iterations", 50))
+
+        current_node = self.entry_point
+        iteration_count = 0
+
+        gate_name_by_validator = {
+            "validator_post_lit": "post_literature_review",
+            "validator_post_data": "post_data_processing",
+            "validator_post_analysis": "post_analysis",
+        }
+
+        retry_default_target = {
+            "human_post_lit": "literature_review",
+            "human_post_data": "data_processing",
+            "human_post_analysis": "analysis",
+        }
+        continue_target = {
+            "human_post_lit": "data_processing",
+            "human_post_data": "knowledge_graph",
+            "human_post_analysis": "writing",
+        }
+        
+        while current_node != "END":
+            iteration_count += 1
+            if iteration_count > max_iterations:
+                logger.error(
+                    "Eager graph exceeded max_iterations=%s; forcing graceful stop.",
+                    max_iterations,
+                )
+                state["abort"] = True
+                state["max_iterations_reached"] = True
+                current_node = "audit_formatter"
+                # Run formatter once to preserve audit export before ending.
+                if iteration_count > (max_iterations + 1):
+                    break
+
+            logger.info(f"Eagerly Executing [ {current_node} ]")
+
+            if current_node in gate_name_by_validator:
+                state["current_gate_name"] = gate_name_by_validator[current_node]
+            
+            # Execute node function (must be an async node)
+            node_func = self.nodes.get(current_node)
+            if not node_func:
+                logger.error(f"Node '{current_node}' not found in graph.")
+                break
+                
+            # Node execution
+            result = await node_func(state, config=config)
+            
+            # Merge result into state (emulating LangGraph's merge logic)
+            if isinstance(result, dict):
+                state.update(result) # TypedDict update
+            
+            # -----------------------------------------------------------------------
+            # ROUTING LOGIC (Replicating the edges from the original StateGraph)
+            # -----------------------------------------------------------------------
+            next_node = "END"
+            
+            if self.rigor_level == "exploratory":
+                # Linear exploratory path
+                mapping = {
+                    "literature_review": "data_processing",
+                    "data_processing": "knowledge_graph",
+                    "knowledge_graph": "analysis",
+                    "analysis": "writing",
+                    "audit_formatter": "END"
+                }
+                if current_node == "writing":
+                    route = _route_after_writing(state)
+                    next_node = "literature_review" if route == "backtrack" else "audit_formatter"
+                else:
+                    next_node = mapping.get(current_node, "END")
+            else:
+                # Full Rigor Path with Validation Gates
+                if current_node == "literature_review":
+                    next_node = "validator_post_lit"
+                elif current_node == "validator_post_lit":
+                    route = _route_after_validation(state)
+                    next_node = "data_processing" if route == "continue" else "human_post_lit"
+                elif current_node == "human_post_lit":
+                    route = _route_after_human(state)
+                    if route == "retry":
+                        next_node = state.get("retry_target") or retry_default_target[current_node]
+                    elif route == "abort":
+                        next_node = "audit_formatter"
+                    else:
+                        next_node = continue_target[current_node]
+
+                elif current_node == "data_processing":
+                    next_node = "validator_post_data"
+                elif current_node == "validator_post_data":
+                    route = _route_after_validation(state)
+                    next_node = "knowledge_graph" if route == "continue" else "human_post_data"
+                elif current_node == "human_post_data":
+                    route = _route_after_human(state)
+                    if route == "retry":
+                        next_node = state.get("retry_target") or retry_default_target[current_node]
+                    elif route == "abort":
+                        next_node = "audit_formatter"
+                    else:
+                        next_node = continue_target[current_node]
+
+                elif current_node == "knowledge_graph":
+                    next_node = "analysis"
+
+                elif current_node == "analysis":
+                    next_node = "validator_post_analysis"
+                elif current_node == "validator_post_analysis":
+                    route = _route_after_validation(state)
+                    next_node = "writing" if route == "continue" else "human_post_analysis"
+                elif current_node == "human_post_analysis":
+                    route = _route_after_human(state)
+                    if route == "retry":
+                        next_node = state.get("retry_target") or retry_default_target[current_node]
+                    elif route == "abort":
+                        next_node = "audit_formatter"
+                    else:
+                        next_node = continue_target[current_node]
+
+                elif current_node == "writing":
+                    route = _route_after_writing(state)
+                    next_node = "literature_review" if route == "backtrack" else "audit_formatter"
+                
+                elif current_node == "audit_formatter":
+                    next_node = "END"
+
+            current_node = next_node
+
+        logger.info("Eager execution loop completed.")
+        return state
+
+
+# ---------------------------------------------------------------------------
+# Graph Builder (Eager version)
 # ---------------------------------------------------------------------------
 
 
 def build_research_graph(
     rigor_level: str = "exploratory",
-) -> Any:
+) -> EagerGraphRunner:
     """
-    Build and compile the LangGraph research pipeline.
-
-    The graph structure:
-
-    literature_review → [validator → human?] → data_processing →
-    [validator → human?] → knowledge_graph → analysis →
-    [validator → human?] → writing → audit_formatter → END
-
-    For "exploratory" rigor, validation gates are skipped.
+    Builds an eager graph runner that executes the PRISMA research pipeline.
+    
+    This replaces the compiled LangGraph approach to give the user immediate
+    execution feedback and easier manual control.
     """
-    graph = StateGraph(ResearchState)
+    
+    # Define node mapping
+    nodes = {
+        "literature_review": literature_review_node,
+        "data_processing": data_processing_node,
+        "knowledge_graph": knowledge_graph_node,
+        "analysis": analysis_node,
+        "writing": writing_node,
+        "audit_formatter": audit_formatter_node,
+        # Shared instances for gates
+        "validator_post_lit": quality_validator_node,
+        "validator_post_data": quality_validator_node,
+        "validator_post_analysis": quality_validator_node,
+        "human_post_lit": human_intervention_node,
+        "human_post_data": human_intervention_node,
+        "human_post_analysis": human_intervention_node,
+    }
 
-    # ---- Add all nodes ----
-    graph.add_node("literature_review", literature_review_node)
-    graph.add_node("data_processing", data_processing_node)
-    graph.add_node("knowledge_graph", knowledge_graph_node)
-    graph.add_node("analysis", analysis_node)
-    graph.add_node("writing", writing_node)
-    graph.add_node("audit_formatter", audit_formatter_node)
-
-    # Validation + human intervention nodes
-    # We use separate named instances for each gate to allow
-    # different routing from each point
-    graph.add_node("validator_post_lit", quality_validator_node)
-    graph.add_node("validator_post_data", quality_validator_node)
-    graph.add_node("validator_post_analysis", quality_validator_node)
-    graph.add_node("human_post_lit", human_intervention_node)
-    graph.add_node("human_post_data", human_intervention_node)
-    graph.add_node("human_post_analysis", human_intervention_node)
-
-    # ---- Entry point ----
-    graph.set_entry_point("literature_review")
-
-    # ---- Edges: Literature Review → Validation Gate 1 ----
-    if rigor_level == "exploratory":
-        # Skip all validation gates
-        graph.add_edge("literature_review", "data_processing")
-        graph.add_edge("data_processing", "knowledge_graph")
-        graph.add_edge("knowledge_graph", "analysis")
-        graph.add_edge("analysis", "writing")
-        graph.add_conditional_edges(
-            "writing",
-            _route_after_writing,
-            {
-                "backtrack": "literature_review",
-                "finish": "audit_formatter",
-            },
-        )
-    else:
-        # === Gate 1: After literature review ===
-        graph.add_edge("literature_review", "validator_post_lit")
-        graph.add_conditional_edges(
-            "validator_post_lit",
-            _route_after_validation,
-            {
-                "continue": "data_processing",
-                "human_intervention": "human_post_lit",
-            },
-        )
-        graph.add_conditional_edges(
-            "human_post_lit",
-            _route_after_human,
-            {
-                "continue": "data_processing",
-                "abort": "audit_formatter",
-            },
-        )
-
-        # === Gate 2: After data processing ===
-        graph.add_edge("data_processing", "validator_post_data")
-        graph.add_conditional_edges(
-            "validator_post_data",
-            _route_after_validation,
-            {
-                "continue": "knowledge_graph",
-                "human_intervention": "human_post_data",
-            },
-        )
-        graph.add_conditional_edges(
-            "human_post_data",
-            _route_after_human,
-            {
-                "continue": "knowledge_graph",
-                "abort": "audit_formatter",
-            },
-        )
-
-        # knowledge_graph → analysis (no gate here)
-        graph.add_edge("knowledge_graph", "analysis")
-
-        # === Gate 3: After analysis ===
-        graph.add_edge("analysis", "validator_post_analysis")
-        graph.add_conditional_edges(
-            "validator_post_analysis",
-            _route_after_validation,
-            {
-                "continue": "writing",
-                "human_intervention": "human_post_analysis",
-            },
-        )
-        graph.add_conditional_edges(
-            "human_post_analysis",
-            _route_after_human,
-            {
-                "continue": "writing",
-                "abort": "audit_formatter",
-            },
-        )
-
-        # writing → audit_formatter OR backtrack to literature_review
-        graph.add_conditional_edges(
-            "writing",
-            _route_after_writing,
-            {
-                "backtrack": "literature_review",
-                "finish": "audit_formatter",
-            },
-        )
-
-    # ---- Terminal edge ----
-    graph.add_edge("audit_formatter", END)
-
-    # ---- Compile ----
-    compiled = graph.compile()
     logger.info(
-        f"Compiled research graph with rigor_level={rigor_level!r}, "
-        f"validation_gates={'enabled' if rigor_level != 'exploratory' else 'disabled'}"
+        f"Initialized EAGER research graph with rigor_level={rigor_level!r}"
     )
-    return compiled
+    
+    return EagerGraphRunner(nodes=nodes, entry_point="literature_review", rigor_level=rigor_level)
 
 
 # ---------------------------------------------------------------------------
@@ -234,6 +290,7 @@ async def run_research_pipeline(
     interactive: bool = True,
     config_path: str = "config/config.yaml",
     mode: Literal["deterministic", "agentic"] = "deterministic",
+    agentic_model: Optional[str] = None,
 ) -> ResearchState:
     """
     High-level function to run the full research pipeline.
@@ -262,6 +319,7 @@ async def run_research_pipeline(
             project_name=project_name,
             research_topic=research_topic,
             research_goals=research_goals,
+            model=agentic_model,
         )
         logger.info("Agentic pipeline complete!")
         return result

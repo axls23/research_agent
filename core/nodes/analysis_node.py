@@ -62,20 +62,27 @@ async def analysis_node(
     # ---- LLM synthesis (Extended Thinking ) ----
     if llm and entities:
         entity_texts = [e.get("text", "") for e in entities[:50]]
+        # Load the NEXUS ontology rules directly from the skill file so the runtime LLM understands the schema
+        skill_rules = ""
+        skill_path = os.path.join(os.path.dirname(__file__), "..", "..", ".agents", "skills", "nexus-neo4j-mapper", "SKILL.md")
+        try:
+            if os.path.exists(skill_path):
+                with open(skill_path, "r", encoding="utf-8") as f:
+                    skill_rules = f"\n\n=== ONTOLOGY RULES ===\n{f.read()}"
+        except Exception as e:
+            logger.warning(f"Failed to load NEXUS skill rules: {e}")
+
         system = (
-            "You are a research analyst performing a systematic review. "
+            "You are the NEXUS Engine traversing a knowledge hypergraph. "
             "Think step-by-step through the following structured analysis:\n\n"
-            "1. CATEGORIZE: Group the entities by type (concept, method, "
-            "result, dataset). List the categories.\n"
-            "2. PATTERNS: Identify recurring themes that appear across "
-            "multiple papers. Note frequency.\n"
-            "3. CONTRADICTIONS: Note any conflicting findings or "
-            "methodological disagreements between papers.\n"
-            "4. GAPS: What is missing from the literature? What questions "
-            "remain unanswered?\n"
-            "5. SYNTHESIS: Write your final structured analysis combining "
-            "the above. Be specific and cite entity names.\n\n"
-            "Show your reasoning for each step."
+            "1. HYPEREDGE IDENTIFICATION: List the abstract 'Core Principles' discovered across the papers.\n"
+            "2. ISOMORPHIC CLUSTERING: Identify situations where different domains or papers share the SAME Hyperedge (Core Principle). "
+            "Highlight these structural intersections explicitly.\n"
+            "3. CROSS-DOMAIN SOLUTIONS: Where Domains A and B share an isomorphic cluster, can a METHOD in Domain A "
+            "solve a LIMITATION in Domain B? Propose actionable cross-silo insights.\n"
+            "4. SYNTHESIS: Write your final structured action report combining "
+            "the above into a 'Concept Canvas'. Be specific and cite the exact terms.\n\n"
+            f"Show your reasoning for each step.{skill_rules}"
         )
         # ---- GraphRAG Integration: Qdrant + Neo4j Context Retrieval ----
         # Fetch deep structural context instead of just a flat list of entities
@@ -139,7 +146,7 @@ async def analysis_node(
 async def _retrieve_graphrag_context(topic: str, entities: List[Dict[str, Any]]) -> str:
     """
     1. Embeds the topic and queries Qdrant to find semantic entry points.
-    2. Queries Neo4j to find structural 2-hop relationships around those entry points.
+    2. Queries Neo4j to find structural 2-hop relationships AND Hyperedge Intersections.
     Falls back to a flat list of entities if either DB is unavailable.
     """
     fallback_context = ", ".join([e.get("text", "") for e in entities[:50]])
@@ -178,7 +185,19 @@ async def _retrieve_graphrag_context(topic: str, entities: List[Dict[str, Any]])
 
         with driver.session() as session:
             for text in entry_texts:
-                # 2-hop traversal query
+                
+                # NEXUS Hyperedge Intersection Query (Isomorphic Mapping)
+                iso_result = session.run(
+                    "MATCH (e1 {text: $text})-[:IN_HYPEREDGE]->(h:Hyperedge)<-[:IN_HYPEREDGE]-(e2) "
+                    "WHERE elementId(e1) <> elementId(e2) "
+                    "RETURN e1.text AS source, h.principle_name AS principle, e2.text AS target LIMIT 10",
+                    text=text,
+                )
+                for record in iso_result:
+                    path = f"[ISOMORPHIC MATCH]: '{record['source']}' AND '{record['target']}' SHARE PRINCIPLE: '{record['principle']}'"
+                    graph_traces.append(path)
+
+                # Standard 2-hop traversal query (fallback context)
                 result = session.run(
                     "MATCH (start {text: $text})-[r1]->(mid)-[r2]->(end) "
                     "RETURN start.text AS s, type(r1) AS r1_type, mid.text AS m, "
@@ -189,7 +208,7 @@ async def _retrieve_graphrag_context(topic: str, entities: List[Dict[str, Any]])
                     path = f"({record['s']}) -[{record['r1_type']}]-> ({record['m']}) -[{record['r2_type']}]-> ({record['e']})"
                     graph_traces.append(path)
 
-                # Fallback purely to 1-hop if 2-hop is sparse
+                # Fallback purely to 1-hop if graph is sparse
                 if not graph_traces:
                     result1 = session.run(
                         "MATCH (start {text: $text})-[r1]->(mid) "

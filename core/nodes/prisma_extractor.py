@@ -114,9 +114,25 @@ class PRISMATransparency(BaseModel):
     )
 
 
+class CorePrinciple(BaseModel):
+    """NEXUS Isomorphic Abstraction."""
+
+    domain_jargon: str = Field(description="The original domain-specific term (e.g., 'Angiogenesis')")
+    abstract_principle: str = Field(description="The domain-agnostic mathematical or structural principle (e.g., 'Decentralized Resource Calling')")
+    explanation: str = Field(description="Why this jargon maps to this principle")
+
+
+class HyperedgeContext(BaseModel):
+    """Groups multiple nodes (Objective, Method, Result, etc.) under one unified structural principle."""
+
+    principle_name: str = Field(description="The unifying abstract principle (must match a CorePrinciple's abstract_principle)")
+    involved_entity_texts: List[str] = Field(description="List of EXACT text spans from extracted objectives/methodologies/etc. that participate in this principle")
+    hyperedge_weight: float = Field(default=1.0, description="Confidence of this n-ary relationship (0.0 to 1.0)")
+
+
 class PRISMAExtraction(BaseModel):
     """
-    Full PRISMA 2020-aligned extraction from a paper chunk.
+    Full PRISMA 2020-aligned extraction from a paper chunk + NEXUS Extensions.
 
     This is the schema passed to LLM generate_structured().
     GLiNER entity spans are injected into the prompt as grounded context.
@@ -128,6 +144,8 @@ class PRISMAExtraction(BaseModel):
     limitations: List[PRISMALimitation] = Field(default_factory=list)
     implications: List[PRISMAImplication] = Field(default_factory=list)
     transparency: Optional[PRISMATransparency] = Field(default=None)
+    core_principles: List[CorePrinciple] = Field(default_factory=list)
+    hyperedges: List[HyperedgeContext] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -141,6 +159,7 @@ PRISMA_ENTITY_TYPES = {
     "result",
     "limitation",
     "implication",
+    "core_principle",
 }
 
 PRISMA_RELATION_MAP = {
@@ -150,6 +169,7 @@ PRISMA_RELATION_MAP = {
     ("paper", "result"): "REPORTS_FINDING",
     ("paper", "limitation"): "HAS_LIMITATION",
     ("result", "implication"): "SUPPORTS_IMPLICATION",
+    ("paper", "core_principle"): "EXEMPLIFIES_PRINCIPLE",
 }
 
 # GLiNER label vocabulary — maps to PRISMA entity types
@@ -327,6 +347,10 @@ RULE SET D — Discussion & Transparency:
 - Extract implications for practice, policy, or future research
 - Identify funding sources and data availability statements
 
+RULE SET E — NEXUS Isomorphic Abstraction & Hyperedges:
+- Translate domain-specific jargon into universal "**Core Principles**" (abstract structural/mathematical concepts).
+- Group extracted texts (Objectives, Methods, Results, Limitations) that share the same principle into **Hyperedges**. Do not just use 1-to-1 relations, group the exact text spans that manifest this pattern together.
+
 Only extract what is explicitly stated in the text. Do not infer or fabricate data.
 If a category has no relevant content in this chunk, return an empty list for that field."""
 
@@ -336,7 +360,7 @@ async def extract_prisma_structured(
     paper_id: str,
     gliner_spans: List[Dict[str, str]],
     llm: Any,
-) -> Tuple[List[Dict[str, Any]], List[Tuple[str, str, str]]]:
+) -> Tuple[List[Dict[str, Any]], List[Tuple[str, str, str]], List[Dict[str, Any]]]:
     """
     Use LLM with Pydantic schema to extract structured PRISMA data.
 
@@ -345,6 +369,7 @@ async def extract_prisma_structured(
     Returns:
         entities: List of PRISMA entity dicts
         relations: List of (source_text, relation_type, target_text) triples
+        hyperedges: List of extracted hyperedge dictionaries
     """
     # Format GLiNER spans as grounded context
     if gliner_spans:
@@ -398,11 +423,12 @@ async def extract_prisma_structured(
 
     except Exception as e:
         logger.warning(f"LLM PRISMA extraction failed: {e}")
-        return [], []
+        return [], [], []
 
     # Convert Pydantic result into entity dicts and relation triples
     entities: List[Dict[str, Any]] = []
     relations: List[Tuple[str, str, str]] = []
+    hyperedges: List[Dict[str, Any]] = []
 
     # Paper node (always create one per paper)
     paper_text = f"Paper:{paper_id}"
@@ -514,12 +540,60 @@ async def extract_prisma_structured(
                 "prisma_properties": transparency_props,
             }
         )
+        
+    # --- Core Principles ---
+    for cp in result.core_principles:
+        eid = str(uuid.uuid4())[:8]
+        entities.append(
+            {
+                "entity_id": eid,
+                "label": "core_principle",
+                "text": cp.abstract_principle,
+                "paper_ids": [paper_id],
+                "prisma_properties": {
+                    "extraction_tier": "llm",
+                    "domain_jargon": cp.domain_jargon,
+                    "explanation": cp.explanation
+                },
+            }
+        )
+        relations.append((paper_text, "EXEMPLIFIES_PRINCIPLE", cp.abstract_principle))
+
+    # --- Hyperedges ---
+    for he in result.hyperedges:
+        # Resolve involved entity texts to our generated entity IDs where possible
+        resolved_ids = []
+        for involved_text in he.involved_entity_texts:
+            for ent in entities:
+                # Basic string match or substring match to find the corresponding entity ID
+                if involved_text.lower() in ent["text"].lower() or ent["text"].lower() in involved_text.lower():
+                    resolved_ids.append(ent["entity_id"])
+                    break
+        
+        # We also want to include the Core Principle entity itself in the hyperedge member list
+        principle_ent_id = None
+        for ent in entities:
+            if ent["label"] == "core_principle" and ent["text"] == he.principle_name:
+                principle_ent_id = ent["entity_id"]
+                break
+                
+        if principle_ent_id and principle_ent_id not in resolved_ids:
+            resolved_ids.append(principle_ent_id)
+
+        hyperedges.append({
+            "hyperedge_id": str(uuid.uuid4())[:8],
+            "principle_name": he.principle_name,
+            "member_entity_ids": list(set(resolved_ids)),
+            "domain_jargon": [],  # Can track distinct jargons later when reducing graph
+            "weight": max(0.0, min(1.0, he.hyperedge_weight)),
+            "paper_ids": [paper_id]
+        })
 
     logger.info(
-        f"LLM extracted {len(entities)} PRISMA entities and "
-        f"{len(relations)} relations (paper_id={paper_id})"
+        f"LLM extracted {len(entities)} PRISMA entities, "
+        f"{len(relations)} relations, and {len(hyperedges)} hyperedges (paper_id={paper_id})"
     )
-    return entities, relations
+    return entities, relations, hyperedges
 
 
 # ---------------------------------------------------------------------------
@@ -531,14 +605,14 @@ async def extract_prisma_entities(
     text: str,
     paper_id: str,
     llm: Any = None,
-) -> Tuple[List[Dict[str, Any]], List[Tuple[str, str, str]]]:
+) -> Tuple[List[Dict[str, Any]], List[Tuple[str, str, str]], List[Dict[str, Any]]]:
     """
     Run the full 2-tier PRISMA extraction pipeline.
 
     1. GLiNER (Tier 1) — grounded entity spans
-    2. LLM + Pydantic (Tier 2) — structured PRISMA extraction
+    2. LLM + Pydantic (Tier 2) — structured PRISMA extraction + NEXUS abstractions
 
-    If no LLM is available, returns only GLiNER results.
+    If no LLM is available, returns only GLiNER results and empty relations/hyperedges.
     If GLiNER is unavailable, falls back to LLM-only extraction.
     """
     # Tier 1: GLiNER
@@ -546,7 +620,7 @@ async def extract_prisma_entities(
 
     # Tier 2: LLM structured extraction (uses GLiNER spans as context)
     if llm is not None:
-        llm_entities, llm_relations = await extract_prisma_structured(
+        llm_entities, llm_relations, llm_hyperedges = await extract_prisma_structured(
             text, paper_id, gliner_spans, llm
         )
 
@@ -560,7 +634,7 @@ async def extract_prisma_entities(
                     combined_entities.append(g_ent)
                     seen_texts.add(g_ent["text"].lower())
 
-            return combined_entities, llm_relations
+            return combined_entities, llm_relations, llm_hyperedges
 
-    # Fallback: GLiNER only (no relations without LLM)
-    return gliner_entities, []
+    # Fallback: GLiNER only (no relations/hyperedges without LLM)
+    return gliner_entities, [], []

@@ -418,6 +418,11 @@ SUBAGENT_PROMPTS = {
         "Produce well-structured, evidence-based academic text. After drafting, check for "
         "evidence gaps that may require additional literature retrieval."
     ),
+    "reasoning": (
+        "You are a deep-reasoning agent with the ability to run Python code to solve "
+        "complex mathematical, logical, or data-heavy problems. Use your Python sandbox "
+        "to verify hypotheses or perform complex calculations when requested."
+    ),
 }
 
 
@@ -426,7 +431,7 @@ SUBAGENT_PROMPTS = {
 # ---------------------------------------------------------------------------
 
 
-def _build_subagent_configs() -> List[Dict[str, Any]]:
+def _build_subagent_configs(global_model: str = "openai:Qwen/Qwen2.5-1.5B-Instruct") -> List[Dict[str, Any]]:
     """Build subagent configuration dicts for create_deep_agent."""
     from core.agent_tools import (
         search_literature,
@@ -438,36 +443,59 @@ def _build_subagent_configs() -> List[Dict[str, Any]]:
         draft_section,
         validate_quality,
     )
+    
+    # Subagents use a fast, concurrent vLLM server by default (Port 8000 via OpenAI provider).
+    vllm_model = "openai:Qwen/Qwen2.5-0.5B"
+    
+    # We always include a deep-reasoner powered by Fast-RLM (Python enabled)
+    from core.llm_provider import ChatFastRLM
+    import os
+    rlm_llm = ChatFastRLM(
+        model_name=os.getenv("RLM_PRIMARY_MODEL", "Qwen/Qwen2.5-0.5B"),
+        temperature=0.7
+    )
 
     return [
+        {
+            "name": "deep-reasoner",
+            "description": "Call this agent for complex reasoning, math, or tasks requiring Python code execution.",
+            "system_prompt": SUBAGENT_PROMPTS["reasoning"],
+            "model": rlm_llm,
+            "tools": [validate_quality],
+        },
         {
             "name": "literature-search",
             "description": "Search academic databases with PICO decomposition and LLM screening.",
             "system_prompt": SUBAGENT_PROMPTS["literature"],
+            "model": vllm_model,
             "tools": [search_literature, validate_quality],
         },
         {
             "name": "data-processing",
             "description": "Process research papers into text chunks.",
             "system_prompt": SUBAGENT_PROMPTS["data_processing"],
+            "model": vllm_model,
             "tools": [process_documents],
         },
         {
             "name": "knowledge-graph",
             "description": "Extract PRISMA entities and build Neo4j/Qdrant stores.",
             "system_prompt": SUBAGENT_PROMPTS["knowledge_graph"],
+            "model": vllm_model,
             "tools": [extract_prisma_knowledge, qdrant_search, neo4j_query],
         },
         {
             "name": "analysis",
             "description": "Analyze evidence with GraphRAG retrieval and LLM synthesis.",
             "system_prompt": SUBAGENT_PROMPTS["analysis"],
+            "model": vllm_model,
             "tools": [analyze_evidence, qdrant_search, neo4j_query],
         },
         {
             "name": "writing",
             "description": "Draft academic sections and detect evidence gaps.",
             "system_prompt": SUBAGENT_PROMPTS["writing"],
+            "model": vllm_model,
             "tools": [draft_section, qdrant_search, validate_quality],
         },
     ]
@@ -496,11 +524,17 @@ def build_orchestrator(
     """
     from core.agent_tools import qdrant_search, neo4j_query, validate_quality
 
-    subagents = _build_subagent_configs()
+    subagents = _build_subagent_configs(global_model=model)
 
     try:
+        # LiteLLM (used by deepagents) does not support AirLLM natively.
+        # Force fallback to our custom LangGraph wrapper for AirLLM.
+        if "airllm" in model.lower():
+            logger.info("AirLLM requested. Bypassing deepagents to use custom LangGraph wrapper.")
+            return _build_langgraph_react_fallback(model)
+            
         from deepagents import create_deep_agent
-
+        
         agent_kwargs: Dict[str, Any] = {
             "system_prompt": ORCHESTRATOR_SYSTEM_PROMPT,
             "tools": [qdrant_search, neo4j_query, validate_quality],
@@ -514,12 +548,26 @@ def build_orchestrator(
 
         if provider == "groq":
             from langchain_groq import ChatGroq
-
-            agent_kwargs["model"] = ChatGroq(
-                model=model_name, api_key=os.environ.get("GROQ_API_KEY", "")
+            # DeepAgents handles raw model classes passing
+            llm = ChatGroq(
+                model=model_name, 
+                api_key=os.environ.get("GROQ_API_KEY", "")
             )
+            agent_kwargs["model"] = llm
+        elif "fast_rlm" in model.lower() or "fast-rlm" in model.lower():
+            # If fast_rlm requested, run the ORCHESTRATOR on vLLM (fast)
+            # but it has access to the deep-reasoner subagent (RLM) created in configs.
+            model_name = os.getenv("RLM_PRIMARY_MODEL", "Qwen/Qwen2.5-0.5B")
+            from langchain_openai import ChatOpenAI
+            llm = ChatOpenAI(
+                model=model_name,
+                base_url="http://172.30.177.136:8000/v1",
+                api_key="dummy"
+            )
+            agent_kwargs["model"] = llm
         else:
-            # Fallback to passing the string
+
+            # Fallback to passing the generic string for liteLLM
             agent_kwargs["model"] = model.replace(":", "/")
 
         orchestrator = create_deep_agent(**agent_kwargs)
@@ -548,13 +596,71 @@ def _build_langgraph_react_fallback(model: str = "llama-3.3-70b-versatile") -> A
 
     try:
         from langgraph.prebuilt import create_react_agent
-        from langchain_groq import ChatGroq
-
+        
         model_name = model.split(":")[-1] if ":" in model else model
-        llm = ChatGroq(
-            model=model_name,
-            api_key=os.environ.get("GROQ_API_KEY", ""),
-        )
+        
+        if "airllm" in model.lower():
+            from langchain_core.language_models.chat_models import BaseChatModel
+            from langchain_core.messages import BaseMessage, AIMessage
+            from langchain_core.outputs import ChatResult, ChatGeneration
+            from pydantic import PrivateAttr
+            from typing import Optional, Any
+            import asyncio
+            
+            class ChatAirLLM(BaseChatModel):
+                model_name: str
+                _provider: Any = PrivateAttr()
+
+                def __init__(self, model_name: str, **kwargs):
+                    super().__init__(model_name=model_name, **kwargs)
+                    from core.llm_provider import AirLLMProvider
+                    self._provider = AirLLMProvider(model=model_name)
+
+                def bind_tools(self, tools: Any, **kwargs: Any) -> Any:
+                    return self
+
+                def _generate(self, messages: list[BaseMessage], stop: Optional[list[str]] = None, run_manager: Optional[Any] = None, **kwargs: Any) -> ChatResult:
+                    prompt = "\n".join([f"{m.type}: {m.content}" for m in messages])
+                    try:
+                        loop = asyncio.get_event_loop()
+                    except RuntimeError:
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                    
+                    if loop.is_running():
+                        import nest_asyncio
+                        nest_asyncio.apply()
+                        
+                    response = loop.run_until_complete(self._provider.generate(prompt=prompt))
+                    message = AIMessage(content=response)
+                    return ChatResult(generations=[ChatGeneration(message=message)])
+                
+                async def _agenerate(self, messages: list[BaseMessage], stop: Optional[list[str]] = None, run_manager: Optional[Any] = None, **kwargs: Any) -> ChatResult:
+                    prompt = "\n".join([f"{m.type}: {m.content}" for m in messages])
+                    response = await self._provider.generate(prompt=prompt)
+                    message = AIMessage(content=response)
+                    return ChatResult(generations=[ChatGeneration(message=message)])
+
+                @property
+                def _llm_type(self) -> str:
+                    return "chat-airllm"
+
+            llm = ChatAirLLM(model_name=model_name)
+        elif "fast_rlm" in model.lower() or "fast-rlm" in model.lower():
+            # Fallback orchestrator uses direct vLLM for the skeleton
+            model_name = os.getenv("RLM_PRIMARY_MODEL", "Qwen/Qwen2.5-0.5B")
+            from langchain_openai import ChatOpenAI
+            llm = ChatOpenAI(
+                model=model_name,
+                base_url="http://172.30.177.136:8000/v1",
+                api_key="dummy"
+            )
+        else:
+            from langchain_groq import ChatGroq
+            llm = ChatGroq(
+                model=model_name,
+                api_key=os.environ.get("GROQ_API_KEY", ""),
+            )
 
         agent = create_react_agent(
             llm,
@@ -587,7 +693,7 @@ async def run_agentic_pipeline(
     project_name: str,
     research_topic: str,
     research_goals: List[str],
-    model: str = "groq:llama-3.3-70b-versatile",
+    model: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Run the research pipeline in agentic mode using ReAct reasoning.
@@ -596,11 +702,24 @@ async def run_agentic_pipeline(
         project_name: Name of the research project.
         research_topic: The main research question.
         research_goals: List of specific research objectives.
-        model: Model identifier for the orchestrator.
-
-    Returns:
-        Dict with the final research results.
+        model: Optional override model identifier.
     """
+    if model is None:
+        import yaml
+        from pathlib import Path
+        path = Path("config/config.yaml")
+        if path.exists():
+            with open(path) as f:
+                cfg = yaml.safe_load(f) or {}
+                # Extract fast_rlm setting if present
+                provider = cfg.get("llm", {}).get("tiers", {}).get("deep", {}).get("provider", "groq")
+                if provider == "fast_rlm":
+                    model = "fast_rlm:primary"
+                else:
+                    model = "groq:llama-3.3-70b-versatile"
+        else:
+            model = "groq:llama-3.3-70b-versatile"
+
     orchestrator = build_orchestrator(model=model)
 
     user_message = (

@@ -11,7 +11,7 @@ system:
 
 # ===== LLM Configuration =====
 llm:
-  provider: "google"  # google | openai | anthropic | groq
+  provider: "google"  # google | openai | anthropic | groq | airllm
   model: "gemini-2.0-flash-exp"
   temperature: 0.7
   max_tokens: 8192
@@ -42,13 +42,13 @@ llm:
   # Agents pick the right tier; all use the same GROQ_API_KEY.
   tiers:
     fast:  # RETRIEVE + GROUND phase (classification, screening, queries)
-      provider: "groq"
-      model: "llama-3.1-8b-instant"
+      provider: "fast_rlm"
+      model: "primary"
       temperature: 0.1
 
     deep:  # REASON + GENERATE phase (synthesis, analysis, writing)
-      provider: "groq"
-      model: "llama-3.3-70b-versatile"
+      provider: "fast_rlm"
+      model: "primary"
       temperature: 0.7
 
   # Agent-to-tier mapping
@@ -107,7 +107,7 @@ workflow:
   
   # Execution settings
   execution:
-    max_parallel_agents: 3
+    max_parallel_agents: 1  # 1 is recommended when using local airllm due to sequential layer loading
     timeout_seconds: 300
     retry_attempts: 3
     retry_delay_seconds: 5

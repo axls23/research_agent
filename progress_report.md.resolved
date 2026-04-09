@@ -1,0 +1,75 @@
+# NEXUS Research Agent: Project State & Progress Report
+
+**Date:** March 2026  
+**Scope:** Review of core architecture, state definition, PRISMA extraction, reasoning graph implementations, and autonomous agent capabilities.
+
+---
+
+## 1. Logical and Mathematical Summary
+
+The system elevates traditional document processing to an interdisciplinary **Hypergraph** framework:
+- **N-ary Relationships (Hyperedges):** Traditional Knowledge Graphs use binary edges (A → B). NEXUS groups multiple disparate entities (methods, results, objectives) that manifest the same underlying structural principle into a single n-ary "Hyperedge".
+- **Isomorphic Clustering:** The core mathematical driving force is discovering isomorphism across domains. By mapping domain-specific jargon to a shared `abstract_principle` (e.g., translating "Angiogenesis" in biology to "Decentralized Resource Calling" in networking), the system identifies structural equivalence between completely different fields.
+- **Embedded Vector Space:** Semantic proximity is modeled in a 384-dimensional dense vector space using `BAAI/bge-small-en-v1.5`, leveraging Cosine Similarity as the distance metric to form continuous-space entry points into the discrete graph logic.
+
+---
+
+## 2. Algorithmic Summary
+
+The pipeline is orchestrated as a stateful `LangGraph` flowchart:
+1. **Search ([literature_review_node](file:///c:/dev/research_agent/core/nodes/literature_review_node.py#19-107)):** An LLM expands user goals into 3-5 precise queries, multi-threading search across ArXiv, Semantic Scholar, and Crossref, while rigorously incrementing PRISMA protocol counters.
+2. **2-Tier Extraction (`prisma_extractor`):**
+   - **Tier 1 (Extractive NER):** Runs `urchade/gliner_mediumv2.1` locally (zero-shot) to detect specific textual spans without hallucination. 
+   - **Tier 2 (Structuring):** Feeds the Tier 1 spans into a remote LLM (via Groq) as grounding context to yield strict `Pydantic` schemas for PRISMA metadata (PICO, methodology, results) and NEXUS `CorePrinciples`.
+3. **Graph Construction ([knowledge_graph_node](file:///c:/dev/research_agent/core/nodes/knowledge_graph_node.py#348-455)):**
+   - Updates Qdrant with encoded embeddings and PRISMA JSON payloads.
+   - Synchronizes Neo4j with explicit nodes, binary relationships (`[:INVESTIGATES]`), and simulated Hyperedges.
+4. **Isomorphic Inference ([analysis_node](file:///c:/dev/research_agent/core/nodes/analysis_node.py#18-129)):** Executes **GraphRAG**. Hits Qdrant to find relevant vector neighborhood entry points, traverses the Neo4j graph using Cypher queries to detect structural intersections, and delegates final synthesis to the LLM to write a "Concept Canvas."
+
+---
+
+## 3. Current System Design Architecture
+
+- **Orchestration:** `LangGraph` managing a rigorous [ResearchState](file:///c:/dev/research_agent/core/state.py#145-208) dictionary, emphasizing reproducibility via an immutable append-only `audit_log`.
+- **Hybrid Compute:** Computationally cheap heuristic/NER/embedding tasks (GLiNER, SentenceTransformers) run locally on CPU/WSL to save cost, while abstract reasoning (structuring, synthesis) hits high-speed cloud LLM APIs (Groq).
+- **Dual Database Strategy:** 
+   - **Neo4j** (Property Graph) strictly for logical constraints, path traversal, and isomorphic pattern matching.
+   - **Qdrant** (Vector DB) for semantic K-NN retrieval and thresholding.
+
+---
+
+## 4. Agent Capability Alignment Score
+
+**Score: 8.5 / 10**  
+*(Very strong alignment to the intended context of discovering interdisciplinary insights, though heavily reliant on prompt engineering.)*
+
+**Why?**
+The system has a brilliant foundational design. The dual-tier extraction successfully prevents the classic "LLM hallucination" problem in scientific review by forcing ground truth via GLiNER spans. Additionally, enforcing the PRISMA 2020 layout directly into the Pydantic schema guarantees academic rigor. GraphRAG traversal effectively mitigates context window limits.
+
+However, the "reasoning" is still partially an illusion. The graph does not natively compute mathematical isomorphism algorithmically (e.g., using VF2 algorithms or Graph Neural Networks); it leans on an explicit Cypher query to group matching tags, and then asks an LLM to generate the "A-ha!" cross-domain insight using its internalized weights.
+
+---
+
+## 5. Technical Debt & AI Engineer Perspective
+
+To reach production-grade robustness or handle a backlog of 10,000+ papers, the following technical debt must be addressed:
+
+1. **Hypergraph Simulation in a Property Graph limitation:**
+   - **Issue:** Neo4j natively supports binary edges. The [knowledge_graph_node](file:///c:/dev/research_agent/core/nodes/knowledge_graph_node.py#348-455) currently simulates a Hyperedge by creating a central `<Hyperedge>` node and drawing `[:IN_HYPEREDGE]` lines to it. 
+   - **Risk:** In massive graphs, this creates dense "star nodes" that cause combinatorial explosions during Cypher traversals.
+   - **Recommendation:** Implement pre-computed Intersection Matrices within a graph processing frame (like NetworkX/cuGraph) rather than executing deep unconstrained Neo4j traversals.
+
+2. **GraphRAG Context Overload:**
+   - **Issue:** In the [analysis_node](file:///c:/dev/research_agent/core/nodes/analysis_node.py#18-129), the script literally stringifies Cypher trace paths [(A)-[r]->(B)](file:///c:/dev/research_agent/core/state.py#75-83) and dumps them into the LLM context.
+   - **Risk:** At scale, massive strings of text-based graph representations degrade the LLM's attention mechanism rapidly.
+   - **Recommendation:** Transition to extracting subgraphs, collapsing them via GNNs (Graph Neural Networks) into Graph Embeddings, or heavily summarizing traversal chunks before exposing them to the LLM prompt.
+
+3. **Synchronous Local Compute Blocking:**
+   - **Issue:** The LangGraph nodes run massive transformer tasks (GLiNER NER and SentenceTransformer encoding) inline during the step execution.
+   - **Risk:** Destroys graph throughput. If the system processes 200 papers, the local node will block extensively.
+   - **Recommendation:** Offload the local heavy-inference steps (Tier 1 NER and vector embeddings) to background workers (e.g., Celery/Redis queue or Ray) with ONNX quantization to speed up inference bounds.
+
+4. **Brittle Fallback Logic:**
+   - **Issue:** If the Groq API throttles or fails during Tier 2 extraction, it currently returns GLiNER entities with NO relations or hyperedges. 
+   - **Risk:** The graph silently builds broken/disconnected islands of entities without the relational glue, breaking downstream analysis logic.
+   - **Recommendation:** Implement robust retry policies (Tenacity) on the extraction node, and flag chunks as `failed_extraction` in the state to require re-processing, rather than saving partial state.

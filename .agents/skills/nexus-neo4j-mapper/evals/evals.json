@@ -1,0 +1,17 @@
+{
+  "skill_name": "nexus-neo4j-mapper",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "I need to add a new function to knowledge_graph_node.py called `_persist_isomorphic_clusters` that takes a list of IsomorphicCluster dictionaries and persists them to Neo4j. It should also connect them to their component Hyperedges.",
+      "expected_output": "A Python function using the neo4j driver, correctly using MERGE for IsomorphicCluster, correctly parameterizing values instead of using f-strings for properties, and using MERGE to create the PART_OF_CLUSTER relationship.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "Please write a Cypher query to retrieve all Hyperedges that have a weight greater than 0.8 and are part of an IsomorphicCluster in the \"Aerospace\" domain.",
+      "expected_output": "A valid Cypher query conforming to the specific patterns described in the skill (MATCH (c:IsomorphicCluster)-[:PART_OF_CLUSTER]-(h:Hyperedge) WHERE 'Aerospace' IN c.domains AND h.weight > 0.8 RETURN h).",
+      "files": []
+    }
+  ]
+}

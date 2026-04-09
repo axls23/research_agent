@@ -102,26 +102,45 @@ export default function ChatPage() {
         bottomRef.current?.scrollIntoView({ behavior: "smooth" });
     }, [messages, isTyping]);
 
-    const sendMessage = () => {
+    const sendMessage = async () => {
         if (!input.trim()) return;
-        const userMsg: Message = { id: crypto.randomUUID(), role: "user", content: input };
+        const currentInput = input;
+        const userMsg: Message = { id: crypto.randomUUID(), role: "user", content: currentInput };
         setMessages((prev) => [...prev, userMsg]);
         setInput("");
         setIsTyping(true);
         setSources([]);
 
-        setTimeout(() => {
+        try {
+            const response = await fetch("http://localhost:8000/api/chat", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ message: currentInput })
+            });
+            const data = await response.json();
+
             setIsTyping(false);
             const aiMsg: Message = {
                 id: crypto.randomUUID(),
                 role: "assistant",
-                content: DEMO_RESPONSE,
-                citations: ["Agentic RAG Survey 2024", "Attention Is All You Need"],
-                agentSteps: AGENT_STEPS,
+                content: data.content || "Processing complete.",
+                citations: data.citations || [],
+                agentSteps: data.agentSteps || [],
             };
             setMessages((prev) => [...prev, aiMsg]);
-            setSources(MOCK_SOURCES);
-        }, 2800);
+            setSources(MOCK_SOURCES); // Keeping mock sources visual layout to not modify UI too much
+        } catch (error) {
+            console.error("Failed to fetch from backend", error);
+            setIsTyping(false);
+            const errorMsg: Message = {
+                id: crypto.randomUUID(),
+                role: "assistant",
+                content: "Sorry, I could not reach the backend API. Please make sure the server is running on port 8000.",
+                citations: [],
+                agentSteps: []
+            };
+            setMessages((prev) => [...prev, errorMsg]);
+        }
     };
 
     return (
