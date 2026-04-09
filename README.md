@@ -63,6 +63,9 @@ research_agent/
 ## Features
 
 - **Workflow Management**: Define and execute complex research workflows
+- **Autonomous ResearcherAgent**: Decomposes user goals, routes through the
+  agentic ReAct/LangGraph pipeline, and keeps run memory for iterative
+  improvement
 - **Agent Integration**: Seamless integration with specialized research agents
 - **Knowledge Graph**: Maintain and query research knowledge
 - **Collaboration**: Support for team-based research projects

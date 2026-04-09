@@ -282,6 +282,28 @@ class TestCollaborationAgent:
             agent.process({"action": "track_progress", "project_id": "project_1"})
         )
         assert result["status"] == "completed"
+        assert "progress" in result
+
+    def test_track_progress_aggregates(self):
+        agent = CollaborationAgent()
+        workflows = [
+            {"name": "lit_review", "status": "completed"},
+            {"name": "analysis", "status": "in_progress"},
+        ]
+        result = _run(
+            agent.process(
+                {
+                    "action": "track_progress",
+                    "project_id": "project_1",
+                    "workflows": workflows,
+                    "documents": [{"id": 1}],
+                }
+            )
+        )
+        progress = result["progress"]
+        assert progress["completed_workflows"] == 1
+        assert progress["completion_ratio"] == 0.5
+        assert "analysis" in progress["active_workflows"]
 
     def test_share_context(self):
         agent = CollaborationAgent()

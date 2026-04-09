@@ -49,9 +49,28 @@ class CollaborationAgent(ResearchAgent):
     async def _track_progress(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """Report on overall project progress."""
         project_id = data.get("project_id", "")
+        workflows = data.get("workflows", [])
+        documents = data.get("documents", [])
+        active = [w for w in workflows if w.get("status") not in {"completed"}]
+        completed = [w for w in workflows if w.get("status") == "completed"]
+
         self.logger.info(f"Tracking progress for project: {project_id}")
-        # TODO: aggregate workflow statuses
-        return {"status": "completed", "progress": {}}
+        progress = {
+            "project_id": project_id,
+            "total_workflows": len(workflows),
+            "completed_workflows": len(completed),
+            "active_workflows": [w.get("name") or w.get("type") for w in active],
+            "documents_shared": len(documents),
+        }
+
+        if progress["total_workflows"]:
+            progress["completion_ratio"] = round(
+                progress["completed_workflows"] / progress["total_workflows"], 2
+            )
+        else:
+            progress["completion_ratio"] = 0.0
+
+        return {"status": "completed", "progress": progress}
 
     async def _share_context(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """Share research context across team members."""
