@@ -70,6 +70,11 @@ class TestRouteAfterHuman:
     def test_abort_routes_to_abort(self):
         assert _route_after_human(_state(abort=True)) == "abort"
 
+    def test_retry_routes_back(self):
+        state = _state(abort=False)
+        state["human_decisions"] = [{"decision": "retry"}]
+        assert _route_after_human(state) == "retry"
+
     def test_no_abort_continues(self):
         assert _route_after_human(_state(abort=False)) == "continue"
 

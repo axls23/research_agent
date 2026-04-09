@@ -80,35 +80,38 @@ def _persist_to_neo4j(
                 nodes_created += 1
 
             # Create PRISMA entity nodes
+            allowed_labels = {
+                "Paper",
+                "Objective",
+                "Methodology",
+                "Result",
+                "Limitation",
+                "Implication",
+                "Concept",
+            }
+
             for ent in entities:
-                label = ent["label"].capitalize()
+                label = ent.get("label", "concept").capitalize()
+                if label not in allowed_labels:
+                    label = "Concept"
                 text = ent["text"]
                 prisma_props = ent.get("prisma_properties", {})
 
-                # Use parameterized label via APOC or fallback to safe labels
-                if label in {
-                    "Paper",
-                    "Objective",
-                    "Methodology",
-                    "Result",
-                    "Limitation",
-                    "Implication",
-                }:
-                    # MERGE entity node with PRISMA properties
-                    props_json = json.dumps(prisma_props) if prisma_props else "{}"
-                    session.run(
-                        f"MERGE (e:{label} {{text: $text}}) "
-                        f"ON CREATE SET e.entity_id = $eid, "
-                        f"  e.paper_ids = $pids, "
-                        f"  e.prisma_properties = $props "
-                        f"ON MATCH SET e.paper_ids = "
-                        f"  [x IN e.paper_ids + $pids WHERE x IS NOT NULL]",
-                        text=text,
-                        eid=ent["entity_id"],
-                        pids=ent["paper_ids"],
-                        props=props_json,
-                    )
-                    nodes_created += 1
+                # Use parameterized label via allowlist to avoid injection
+                props_json = json.dumps(prisma_props) if prisma_props else "{}"
+                session.run(
+                    f"MERGE (e:{label} {{text: $text}}) "
+                    f"ON CREATE SET e.entity_id = $eid, "
+                    f"  e.paper_ids = $pids, "
+                    f"  e.prisma_properties = $props "
+                    f"ON MATCH SET e.paper_ids = "
+                    f"  [x IN e.paper_ids + $pids WHERE x IS NOT NULL]",
+                    text=text,
+                    eid=ent["entity_id"],
+                    pids=ent["paper_ids"],
+                    props=props_json,
+                )
+                nodes_created += 1
 
             # Create PRISMA relationships
             for subj_text, rel_type, obj_text in relations:
@@ -222,14 +225,46 @@ def _embed_and_store_qdrant(
                 "Using in-memory Qdrant (set QDRANT_URL for persistent storage)"
             )
 
-        # Recreate collection
-        client.recreate_collection(
-            collection_name=collection_name,
-            vectors_config=models.VectorParams(
-                size=vector_size,
-                distance=models.Distance.COSINE,
-            ),
-        )
+        # Ensure collection exists without destructive recreation
+        needs_collection = False
+        try:
+            info = client.get_collection(collection_name)
+            current_size = None
+            if info and getattr(info, "config", None):
+                params = getattr(info.config, "params", None)
+                vectors = getattr(params, "vectors", None)
+                if isinstance(vectors, dict):
+                    current_size = vectors.get("size")
+                elif hasattr(vectors, "size"):
+                    current_size = vectors.size
+            if current_size is not None and current_size != vector_size:
+                logger.warning(
+                    "Existing Qdrant collection '%s' has vector size %s "
+                    "(expected %s); recreating to match configuration",
+                    collection_name,
+                    current_size,
+                    vector_size,
+                )
+                client.recreate_collection(
+                    collection_name=collection_name,
+                    vectors_config=models.VectorParams(
+                        size=vector_size,
+                        distance=models.Distance.COSINE,
+                    ),
+                )
+            elif info is None:
+                needs_collection = True
+        except Exception:
+            needs_collection = True
+
+        if needs_collection:
+            client.create_collection(
+                collection_name=collection_name,
+                vectors_config=models.VectorParams(
+                    size=vector_size,
+                    distance=models.Distance.COSINE,
+                ),
+            )
 
         # Upsert in batches
         batch_size = 100
@@ -335,6 +370,7 @@ async def knowledge_graph_node(
     config = config or {}
     cfgr = config.get("configurable", {})
     llm = cfgr.get("llm_deep") or cfgr.get("llm")  # prefer deep tier
+    knowledge_graph_id = state.get("knowledge_graph_id") or str(uuid.uuid4())
 
     chunks = state.get("chunks", [])
     all_entities: List[Dict[str, Any]] = []
@@ -390,6 +426,7 @@ async def knowledge_graph_node(
     # ---- Build summary ----
     summary = {
         "schema": "prisma_2020",
+        "knowledge_graph_id": knowledge_graph_id,
         "entities_extracted": len(all_entities),
         "relations_extracted": len(all_relations),
         "chunks_processed": sample_size,
@@ -417,6 +454,7 @@ async def knowledge_graph_node(
 
     return {
         "current_node": "knowledge_graph",
+        "knowledge_graph_id": knowledge_graph_id,
         "knowledge_entities": all_entities,
         "knowledge_graph_summary": summary,
         "audit_log": audit_log,

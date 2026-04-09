@@ -86,7 +86,7 @@ async def search_arxiv(
         )
 
         # arxiv library is synchronous — run in executor
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         results = await loop.run_in_executor(None, lambda: list(search.results()))
 
         for r in results:

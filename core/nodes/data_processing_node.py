@@ -8,6 +8,7 @@ and chunks documents for downstream analysis.
 from __future__ import annotations
 
 import logging
+import copy
 from typing import Any, Dict
 
 from core.state import ResearchState, append_audit, Chunk
@@ -36,10 +37,11 @@ async def data_processing_node(
     config = config or {}
     use_mistral = config.get("configurable", {}).get("use_mistral_ocr", True)
 
-    papers = list(state.get("papers", []))
+    papers = copy.deepcopy(state.get("papers", []))
     all_chunks: list = list(state.get("chunks", []))
     total_tokens = state.get("total_tokens_extracted", 0)
     extracted_count = 0
+    screened_count = len([p for p in papers if p.get("included", True)])
 
     for i, paper in enumerate(papers):
         if not paper.get("included", True):
@@ -107,7 +109,8 @@ async def data_processing_node(
     return {
         "current_node": "data_processing",
         "papers": papers,
-        "papers_screened": extracted_count,
+        "papers_screened": screened_count,
+        "papers_included": extracted_count,
         "chunks": all_chunks,
         "total_tokens_extracted": total_tokens,
         "audit_log": audit_log,

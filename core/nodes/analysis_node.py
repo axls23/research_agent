@@ -36,6 +36,7 @@ async def analysis_node(
 
     # ---- Descriptive summary ----
     included = [p for p in papers if p.get("included", True)]
+    included_count = len(included)
     topic_dist: Dict[str, int] = {}
     for e in entities:
         label = e.get("label", "unknown")
@@ -52,7 +53,7 @@ async def analysis_node(
             "figures": [],
             "tables": [{"entity_distribution": topic_dist}],
             "statistical_output": {
-                "papers_included": len(included),
+                "papers_included": included_count,
                 "entity_count": len(entities),
                 "topic_distribution": topic_dist,
             },
@@ -126,7 +127,6 @@ async def analysis_node(
     return {
         "current_node": "analysis",
         "analysis_results": results,
-        "papers_included": len(included),
         "audit_log": audit_log,
     }
 

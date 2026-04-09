@@ -100,6 +100,15 @@ progress = await orchestrator.get_research_progress(project_id)
 next_steps = await orchestrator.suggest_next_steps(project_id)
 ```
 
+### Windows one-click launcher
+
+For a turnkey demo run on Windows, use the bundled executable launcher:
+
+1. Install Python 3.10+ and the project dependencies (`pip install -e .`).
+2. From the repository root, double-click `bin/research_agent_launcher.exe`
+   (or run it from PowerShell). It will invoke `run_research_agent.py` with
+   the LangGraph pipeline and PRISMA rigor level enabled.
+
 ## Development
 
 1. Create a virtual environment:
