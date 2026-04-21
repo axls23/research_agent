@@ -18,6 +18,49 @@ from core.state import ResearchState, append_audit
 logger = logging.getLogger(__name__)
 
 
+def _compute_prisma_metrics(state: ResearchState) -> Dict[str, int]:
+    """Compute PRISMA counters from stage artifacts with invariant guards.
+
+    Mapping decision:
+    - identified_records: papers found in search
+    - screened_records: records retained after dedup/search stage
+    - full_text_assessed: records with extracted text available
+    - studies_included: included records with extracted text
+    """
+    papers = [p for p in state.get("papers", []) if isinstance(p, dict)]
+
+    identified_records = max(int(state.get("papers_found", 0) or 0), len(papers))
+    screened_records = max(int(state.get("papers_screened", 0) or 0), len(papers))
+
+    included_candidates = [p for p in papers if p.get("included", True)]
+    full_text_assessed = sum(1 for p in papers if p.get("full_text"))
+    included_with_full_text = sum(
+        1 for p in included_candidates if p.get("full_text")
+    )
+
+    if papers:
+        studies_included = included_with_full_text
+    else:
+        studies_included = int(state.get("papers_included", 0) or 0)
+
+    # Enforce PRISMA invariants to avoid negative exclusions and impossible counts.
+    screened_records = min(screened_records, identified_records)
+    full_text_assessed = min(full_text_assessed, screened_records)
+    studies_included = min(studies_included, full_text_assessed)
+
+    excluded_at_screening = max(identified_records - screened_records, 0)
+    excluded_at_full_text = max(full_text_assessed - studies_included, 0)
+
+    return {
+        "identified_records": identified_records,
+        "screened_records": screened_records,
+        "full_text_assessed": full_text_assessed,
+        "studies_included": studies_included,
+        "excluded_at_screening": excluded_at_screening,
+        "excluded_at_full_text": excluded_at_full_text,
+    }
+
+
 def _generate_prisma_diagram(state: ResearchState) -> str:
     """
     Generate an ASCII PRISMA 2020 flow diagram from the state.
@@ -25,12 +68,14 @@ def _generate_prisma_diagram(state: ResearchState) -> str:
     Uses the standard PRISMA boxes:
     - Identification → Screening → Included
     """
-    found = state.get("papers_found", 0)
-    screened = state.get("papers_screened", 0)
-    included = state.get("papers_included", 0)
+    metrics = _compute_prisma_metrics(state)
+    found = metrics["identified_records"]
+    screened = metrics["screened_records"]
+    full_text_assessed = metrics["full_text_assessed"]
+    included = metrics["studies_included"]
     dbs = ", ".join(state.get("databases_searched", ["N/A"]))
-    excluded_screen = found - screened
-    excluded_full = screened - included
+    excluded_screen = metrics["excluded_at_screening"]
+    excluded_full = metrics["excluded_at_full_text"]
 
     diagram = f"""
 +=======================================================+
@@ -54,7 +99,7 @@ def _generate_prisma_diagram(state: ResearchState) -> str:
 |                     v                                 |
 |  INCLUDED                                             |
 |  +-------------------------------------+              |
-|  | Full-text assessed: {screened:<16}|              |
+|  | Full-text assessed: {full_text_assessed:<16}|              |
 |  | Excluded (full-text): {excluded_full:<13}|              |
 |  | Studies included: {included:<18}|              |
 |  +-------------------------------------+              |
@@ -69,8 +114,9 @@ def _generate_methods_section(state: ResearchState) -> str:
     audit = state.get("audit_log", [])
     dbs = ", ".join(state.get("databases_searched", []))
     queries = state.get("search_queries", [])
-    found = state.get("papers_found", 0)
-    included = state.get("papers_included", 0)
+    metrics = _compute_prisma_metrics(state)
+    found = metrics["identified_records"]
+    included = metrics["studies_included"]
 
     # Extract validation decisions
     decisions = state.get("human_decisions", [])
@@ -132,6 +178,7 @@ async def audit_formatter_node(
     os.makedirs(output_dir, exist_ok=True)
 
     rigor = state.get("rigor_level", "exploratory")
+    metrics = _compute_prisma_metrics(state)
 
     # ---- PRISMA diagram ----
     prisma_diagram = None
@@ -158,13 +205,20 @@ async def audit_formatter_node(
         "rigor_level": rigor,
         "completed_at": datetime.now(timezone.utc).isoformat(),
         "summary": {
-            "papers_found": state.get("papers_found", 0),
-            "papers_screened": state.get("papers_screened", 0),
-            "papers_included": state.get("papers_included", 0),
+            "papers_found": metrics["identified_records"],
+            "papers_screened": metrics["screened_records"],
+            "papers_included": metrics["studies_included"],
+            "full_text_assessed": metrics["full_text_assessed"],
             "databases": state.get("databases_searched", []),
             "entities_extracted": len(state.get("knowledge_entities", [])),
             "validation_gates": len(state.get("validation_reports", [])),
             "human_interventions": len(state.get("human_decisions", [])),
+        },
+        "prisma_mapping": {
+            "identified_records": "papers_found",
+            "screened_records": "max(papers_screened, len(papers)) clamped to identified",
+            "full_text_assessed": "count(papers where full_text is present)",
+            "studies_included": "count(included papers with full_text), clamped to full_text_assessed",
         },
         "audit_log": state.get("audit_log", []),
         "validation_reports": state.get("validation_reports", []),

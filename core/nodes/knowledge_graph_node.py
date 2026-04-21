@@ -355,6 +355,27 @@ async def knowledge_graph_node(
         valid_chunks = [c for c in chunks[:sample_size] if c.get("text")]
         if valid_chunks:
             chunk_texts = [c["text"] for c in valid_chunks]
+
+        relation_diagnostics: Optional[Dict[str, Any]] = None
+        if all_entities and not all_relations:
+            relation_diagnostics = {
+                "entities_extracted": len(all_entities),
+                "relations_extracted": 0,
+                "hyperedges_extracted": len(all_hyperedges),
+                "llm_available": llm is not None,
+                "strict_grounding": rigor_level in ("prisma", "cochrane"),
+                "dual_pass_enabled": is_dual_pass,
+                "sample_size": sample_size,
+                "hypotheses": [
+                    "relation prompts/parser produced entity-only output",
+                    "strict grounding removed relation-bearing entities",
+                    "runtime model path lacks relation extraction capability",
+                ],
+            }
+            logger.warning(
+                "Entity-only extraction detected with zero relations. Diagnostics: %s",
+                relation_diagnostics,
+            )
             chunk_embeddings = embed_model.encode(chunk_texts, show_progress_bar=False)
             for c, emb in zip(valid_chunks, chunk_embeddings):
                 c["embedding"] = emb.tolist()

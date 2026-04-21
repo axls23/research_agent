@@ -29,10 +29,18 @@ async def human_intervention_node(
       - ``override`` → continue despite failures
       - ``abort``    → stop the pipeline
 
-    In non-interactive mode (e.g. CI/tests), auto-overrides.
+    In non-interactive mode (e.g. CI/tests), this node aborts by default.
+    Auto-override must be explicitly enabled via runtime config.
     """
     config = config or {}
-    interactive = config.get("configurable", {}).get("interactive", True)
+    cfgr = config.get("configurable", {})
+    interactive = cfgr.get("interactive", True)
+    allow_auto_override = bool(cfgr.get("allow_auto_override", False))
+    auto_override_gates = {
+        str(g).strip().lower()
+        for g in cfgr.get("auto_override_gates", [])
+        if str(g).strip()
+    }
 
     # Get the latest validation report
     reports = state.get("validation_reports", [])
@@ -40,6 +48,7 @@ async def human_intervention_node(
     failures = latest.get("failures", ["Unknown validation failure"])
     gate_name = latest.get("gate_name", "unknown")
     retry_target = state.get("last_failed_node")
+    reason = ""
 
     # ---- Present to user ----
     print("\n" + "=" * 60)
@@ -66,12 +75,20 @@ async def human_intervention_node(
             else:
                 print("Invalid choice. Please enter R, O, or A.")
     else:
-        # Non-interactive: auto-override
-        logger.info("Non-interactive mode — auto-overriding validation failure")
-        decision = "override"
+        gate_key = str(gate_name).strip().lower()
+        if allow_auto_override or gate_key in auto_override_gates:
+            logger.info("Non-interactive mode — auto-overriding validation failure")
+            decision = "override"
+            reason = "auto_override_enabled"
+        else:
+            logger.warning(
+                "Non-interactive mode with failing gate '%s' and no auto-override policy; aborting.",
+                gate_name,
+            )
+            decision = "abort"
+            reason = "non_interactive_blocking_gate_failed"
 
     # Get optional reason
-    reason = ""
     if interactive and decision != "abort":
         reason = input("Reason (optional, press Enter to skip): ").strip()
 
@@ -93,7 +110,7 @@ async def human_intervention_node(
         action=f"human_{decision}",
         inputs={"gate_name": gate_name, "failures": failures},
         output_summary=f"Human decision at '{gate_name}': {decision}",
-        provenance={"reason": reason},
+        provenance={"reason": reason, "override_reason": reason or None},
     )
 
     logger.info(f"Human decision at '{gate_name}': {decision}")

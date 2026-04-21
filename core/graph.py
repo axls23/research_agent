@@ -288,6 +288,7 @@ async def run_research_pipeline(
     rigor_level: Literal["exploratory", "prisma", "cochrane"] = "exploratory",
     llm: Optional[LLMProvider] = None,
     interactive: bool = True,
+    allow_auto_override: bool = False,
     config_path: str = "config/config.yaml",
     mode: str = "agentic",
     agentic_model: Optional[str] = None,
@@ -332,24 +333,30 @@ async def run_research_pipeline(
     else:
         logger.info(f"Starting DETERMINISTIC Eager pipeline for STRICT rigor ({rigor_level}): {project_name}")
         
-        # Initialize initial state
-        initial_state: ResearchState = {
-            "project_name": project_name,
-            "research_topic": research_topic,
-            "research_goals": research_goals,
-            "rigor_level": rigor_level,
-            "papers": [],
-            "chunks": [],
-            "knowledge_entities": [],
-            "hyperedges": [],
-            "audit_log": [],
-        }
+        # Initialize state from the canonical constructor to keep counters,
+        # validation fields, and PRISMA defaults consistent across runs.
+        initial_state = make_initial_state(
+            project_id="unknown",
+            project_name=project_name,
+            research_topic=research_topic,
+            research_goals=research_goals,
+            rigor_level=rigor_level,
+        )
 
         # Build eager graph
         runner = build_research_graph(rigor_level=rigor_level)
-        
+
+        # Forward runtime controls so strict runs stay non-interactive in harness/CI.
+        runtime_config = {
+            "configurable": {
+                "llm_deep": getattr(llm, "provider", None) if llm else None,
+                "interactive": interactive,
+                "allow_auto_override": allow_auto_override,
+            }
+        }
+
         # Execute logic locally using EagerGraphRunner
-        final_state = await runner.invoke(initial_state, config={"configurable": {"llm_deep": getattr(llm, "provider", None) if llm else None}})
+        final_state = await runner.ainvoke(initial_state, config=runtime_config)
         
         logger.info(f"Deterministic pipeline complete for {project_name}.")
         return final_state

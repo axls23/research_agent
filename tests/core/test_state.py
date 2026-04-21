@@ -211,7 +211,29 @@ class TestAppendAudit:
         state = _make_test_state()
         prov = {"paper_ids": ["p1", "p2"]}
         log = append_audit(state, "a", "x", {}, "s", provenance=prov)
-        assert log[0]["provenance"] == prov
+        assert log[0]["provenance"]["paper_ids"] == ["p1", "p2"]
+
+    def test_provenance_normalizes_override_reason_alias(self):
+        state = _make_test_state()
+        log = append_audit(
+            state,
+            "human_intervention_node",
+            "human_override",
+            {},
+            "Overrode gate",
+            provenance={"reason": "operator approved"},
+        )
+        prov = log[0]["provenance"]
+        assert prov["reason"] == "operator approved"
+        assert prov["override_reason"] == "operator approved"
+
+    def test_provenance_includes_stable_defaults(self):
+        state = _make_test_state()
+        log = append_audit(state, "a", "x", {}, "s")
+        prov = log[0]["provenance"]
+        assert "model_tier" in prov
+        assert "model" in prov
+        assert "override_reason" in prov
 
     def test_timestamp_is_valid_iso8601(self):
         state = _make_test_state()

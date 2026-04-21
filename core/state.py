@@ -15,6 +15,13 @@ from typing import Any, Dict, List, Literal, Optional
 from typing_extensions import TypedDict
 
 
+_PROVENANCE_DEFAULTS: Dict[str, Any] = {
+    "model_tier": None,
+    "model": None,
+    "override_reason": None,
+}
+
+
 # ---------------------------------------------------------------------------
 # Sub-types
 # ---------------------------------------------------------------------------
@@ -322,6 +329,23 @@ def append_audit(
             inputs={"query": q}, output_summary=f"Found {n} papers"
         )
     """
+
+    def _normalize_provenance(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        normalized: Dict[str, Any] = dict(raw or {})
+
+        # Keep backward compatibility with older "reason" keys while exposing a
+        # canonical override_reason field for gate-policy consumers.
+        if "override_reason" not in normalized:
+            reason_value = normalized.get("reason")
+            if isinstance(reason_value, str):
+                stripped = reason_value.strip()
+                normalized["override_reason"] = stripped or None
+
+        for key, default in _PROVENANCE_DEFAULTS.items():
+            normalized.setdefault(key, default)
+
+        return normalized
+
     input_hash = hashlib.sha256(
         json.dumps(inputs, sort_keys=True, default=str).encode()
     ).hexdigest()[:16]
@@ -332,6 +356,6 @@ def append_audit(
         "action": action,
         "input_hash": input_hash,
         "output_summary": output_summary,
-        "provenance": provenance or {},
+        "provenance": _normalize_provenance(provenance),
     }
     return [*state["audit_log"], entry]
