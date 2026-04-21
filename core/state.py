@@ -173,6 +173,8 @@ class ResearchState(TypedDict):
     # ---- Literature Review ----
     search_queries: List[str]
     databases_searched: List[str]  # PRISMA: which DBs were queried
+    search_date_range: Optional[Dict[str, int]]  # e.g. {"min_year": 2015, "max_year": 2026}
+    grey_literature_searched: bool
     papers_found: int  # PRISMA: total raw hits
     papers_screened: int  # PRISMA: after title/abstract screen
     papers_included: int  # PRISMA: after full-text inclusion
@@ -181,6 +183,7 @@ class ResearchState(TypedDict):
     # ---- Data Processing ----
     chunks: List[Chunk]
     total_tokens_extracted: int
+    dual_extraction_performed: bool
 
     # ---- Knowledge Graph ----
     knowledge_entities: List[KnowledgeEntity]
@@ -241,12 +244,15 @@ def make_initial_state(
         abort=False,
         search_queries=[],
         databases_searched=[],
+        search_date_range=None,
+        grey_literature_searched=False,
         papers_found=0,
         papers_screened=0,
         papers_included=0,
         papers=[],
         chunks=[],
         total_tokens_extracted=0,
+        dual_extraction_performed=False,
         knowledge_entities=[],
         knowledge_graph_id=None,
         knowledge_graph_summary=None,

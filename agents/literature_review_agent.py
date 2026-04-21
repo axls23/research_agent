@@ -404,7 +404,7 @@ class LiteratureReviewAgent(ResearchAgent):
                             continue
                         data = await resp.json()
 
-                for item in data.get("data", []):
+                for item in (data.get("data") or []):
                     cited = item.get("citedPaper") or item.get("citingPaper") or item
                     if not cited.get("title"):
                         continue

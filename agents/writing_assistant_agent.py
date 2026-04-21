@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 from core.base_agent import ResearchAgent
-from core.agent_tools import draft_section, qdrant_search
+from core.agent_tools import draft_section, neo4j_vector_search
 
 
 class WritingAssistantAgent(ResearchAgent):
@@ -77,9 +77,9 @@ class WritingAssistantAgent(ResearchAgent):
         topic = data.get("topic", "")
         entities = data.get("entities", [])
 
-        # Use Qdrant to gather semantically rich context
-        qdrant_context = qdrant_search(topic, limit=20)
-        context_texts = [r["text"] for r in qdrant_context]
+        # Use Neo4j Vector to gather semantically rich context
+        vector_context = neo4j_vector_search(topic, limit=20)
+        context_texts = [r["text"] for r in vector_context]
 
         if not self.llm:
             return {
@@ -110,13 +110,13 @@ class WritingAssistantAgent(ResearchAgent):
             "synthesis": synthesis,
             "entity_count": len(entities),
             "paper_count": len(data.get("papers", entities)),
-            "qdrant_context_count": len(qdrant_context),
+            "vector_context_count": len(vector_context),
         }
 
     async def _detect_gaps(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """Check drafted sections for evidence gaps.
 
-        Queries Qdrant per PRISMA domain to verify coverage backing
+        Queries Neo4j Vector per PRISMA domain to verify coverage backing
         the claims made in the draft.
         """
         draft_sections = data.get("draft_sections", {})
@@ -133,7 +133,7 @@ class WritingAssistantAgent(ResearchAgent):
         gaps = []
 
         for domain in prisma_domains:
-            results = qdrant_search(topic, prisma_label=domain, limit=5)
+            results = neo4j_vector_search(topic, prisma_label=domain, limit=5)
             domain_coverage[domain] = len(results)
             if len(results) < 2:
                 gaps.append(

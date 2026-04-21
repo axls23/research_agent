@@ -144,6 +144,33 @@ class TestValidateSearchCoverage:
         failures = validate_search_coverage(state, {})
         assert failures == []
 
+    def test_require_date_range_missing_fails(self):
+        state = _make_state()
+        state["databases_searched"] = ["arxiv", "crossref", "semantic_scholar"]
+        failures = validate_search_coverage(state, {"require_date_range": True})
+        assert len(failures) == 1
+        assert "date range" in failures[0].lower()
+
+    def test_require_date_range_present_passes(self):
+        state = _make_state()
+        state["databases_searched"] = ["arxiv", "crossref", "semantic_scholar"]
+        state["search_date_range"] = {"min_year": 2015, "max_year": 2026}
+        failures = validate_search_coverage(state, {"require_date_range": True})
+        assert failures == []
+
+    def test_require_grey_literature_fails_when_missing(self):
+        state = _make_state()
+        state["databases_searched"] = ["arxiv", "crossref", "semantic_scholar"]
+        failures = validate_search_coverage(state, {"require_grey_literature": True})
+        assert len(failures) == 1
+        assert "grey literature" in failures[0].lower()
+
+    def test_require_grey_literature_passes_with_supported_db(self):
+        state = _make_state()
+        state["databases_searched"] = ["arxiv", "medrxiv"]
+        failures = validate_search_coverage(state, {"require_grey_literature": True})
+        assert failures == []
+
 
 # ---------------------------------------------------------------------------
 # validate_extraction_completeness
@@ -219,6 +246,32 @@ class TestValidateExtractionCompleteness:
         # Only extraction rate should fail
         assert len(failures) == 1
         assert "extraction rate" in failures[0].lower()
+
+    def test_require_dual_extraction_fails_when_missing(self):
+        state = _make_state()
+        state["papers"] = [
+            _make_paper("p1", full_text="text"),
+            _make_paper("p2", full_text="text"),
+        ]
+        failures = validate_extraction_completeness(
+            state,
+            {"min_extraction_rate": 0.8, "require_dual_extraction": True},
+        )
+        assert len(failures) == 1
+        assert "dual extraction" in failures[0].lower()
+
+    def test_require_dual_extraction_passes_with_state_flag(self):
+        state = _make_state()
+        state["dual_extraction_performed"] = True
+        state["papers"] = [
+            _make_paper("p1", full_text="text"),
+            _make_paper("p2", full_text="text"),
+        ]
+        failures = validate_extraction_completeness(
+            state,
+            {"min_extraction_rate": 0.8, "require_dual_extraction": True},
+        )
+        assert failures == []
 
 
 # ---------------------------------------------------------------------------

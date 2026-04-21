@@ -18,6 +18,16 @@ from core.state import ResearchState, ValidationReport
 
 logger = logging.getLogger(__name__)
 
+_GREY_LITERATURE_SOURCES = {
+    "clinicaltrials",
+    "clinicaltrials.gov",
+    "opengrey",
+    "medrxiv",
+    "biorxiv",
+    "who_ictrp",
+    "trialregister",
+}
+
 
 # ---------------------------------------------------------------------------
 # Load workflow config
@@ -56,6 +66,9 @@ def validate_search_coverage(
     Criteria keys:
     - ``min_databases``: minimum number of databases searched
     - ``require_search_log``: if True, audit_log must have search entries
+        - ``require_date_range``: if True, search_date_range metadata must exist
+        - ``require_grey_literature``: if True, at least one grey-literature source
+            must be searched
     - ``min_papers_found``: minimum raw hit count
     """
     failures: List[str] = []
@@ -83,6 +96,38 @@ def validate_search_coverage(
             f"minimum is {min_papers}"
         )
 
+    if criteria.get("require_date_range", False):
+        search_range = state.get("search_date_range") or {}
+        min_year = search_range.get("min_year")
+        max_year = search_range.get("max_year")
+
+        if min_year is None or max_year is None:
+            failures.append(
+                "Search date range metadata missing; expected search_date_range "
+                "with min_year and max_year"
+            )
+        elif not isinstance(min_year, int) or not isinstance(max_year, int):
+            failures.append("Search date range values must be integer years")
+        elif min_year > max_year:
+            failures.append(
+                f"Search date range is invalid: min_year ({min_year}) "
+                f"> max_year ({max_year})"
+            )
+
+    if criteria.get("require_grey_literature", False):
+        databases = [
+            (db or "").strip().lower()
+            for db in state.get("databases_searched", [])
+            if isinstance(db, str)
+        ]
+        explicit_flag = bool(state.get("grey_literature_searched", False))
+        has_grey_database = any(db in _GREY_LITERATURE_SOURCES for db in databases)
+        if not explicit_flag and not has_grey_database:
+            failures.append(
+                "Grey literature search required but no grey-literature "
+                "source was recorded"
+            )
+
     return failures
 
 
@@ -96,6 +141,7 @@ def validate_extraction_completeness(
     Criteria keys:
     - ``min_extraction_rate``: fraction of included papers that must have text
     - ``min_quality_score``: minimum average quality score
+    - ``require_dual_extraction``: if True, dual extraction evidence must exist
     """
     failures: List[str] = []
     papers = state.get("papers", [])
@@ -128,6 +174,20 @@ def validate_extraction_completeness(
             failures.append(
                 f"Average quality score {avg_quality:.2f} is below "
                 f"minimum {min_quality:.2f}"
+            )
+
+    if criteria.get("require_dual_extraction", False):
+        dual_extraction_performed = bool(state.get("dual_extraction_performed", False))
+        if not dual_extraction_performed:
+            dual_extraction_performed = any(
+                bool((p.get("annotations") or {}).get("dual_extraction"))
+                for p in included
+                if isinstance(p, dict)
+            )
+        if not dual_extraction_performed:
+            failures.append(
+                "Dual extraction is required but no dual extraction evidence "
+                "was found"
             )
 
     return failures

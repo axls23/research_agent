@@ -35,6 +35,9 @@ async def data_processing_node(
     """
     config = config or {}
     use_mistral = config.get("configurable", {}).get("use_mistral_ocr", True)
+    dual_extraction_performed = bool(
+        config.get("configurable", {}).get("dual_extraction_performed", False)
+    )
 
     papers = list(state.get("papers", []))
     all_chunks: list = list(state.get("chunks", []))
@@ -45,21 +48,71 @@ async def data_processing_node(
         if not paper.get("included", True):
             continue
 
-        if paper.get("full_text"):
-            # Already extracted
-            continue
-
         source_url = paper.get("source_url", "")
         paper_id = paper.get("paper_id", f"paper_{i}")
+        abstract_text = (paper.get("abstract") or "").strip()
+
+        existing_chunks = [c for c in all_chunks if c.get("paper_id") == paper_id]
+
+        if paper.get("full_text"):
+            # Full text may already exist (e.g., retry runs). Ensure it is chunked once.
+            if existing_chunks:
+                continue
+
+            paper_chunks = chunk_text(
+                text=paper["full_text"],
+                paper_id=paper_id,
+                chunk_size=1000,
+                chunk_overlap=200,
+            )
+            all_chunks.extend(paper_chunks)
+            total_tokens += sum(c.get("token_count", 0) for c in paper_chunks)
+            extracted_count += 1
+            logger.info(
+                f"Chunked existing full_text for {paper_id}: {len(paper_chunks)} chunks"
+            )
+            continue
 
         if not source_url:
-            logger.warning(f"No source URL for paper {paper_id}, skipping")
+            if abstract_text:
+                paper["full_text"] = abstract_text
+                paper["annotations"] = {"method": "abstract_fallback"}
+                paper_chunks = chunk_text(
+                    text=abstract_text,
+                    paper_id=paper_id,
+                    chunk_size=600,
+                    chunk_overlap=100,
+                )
+                all_chunks.extend(paper_chunks)
+                total_tokens += sum(c.get("token_count", 0) for c in paper_chunks)
+                extracted_count += 1
+                logger.warning(
+                    f"No source URL for {paper_id}; used abstract fallback ({len(paper_chunks)} chunks)"
+                )
+            else:
+                logger.warning(f"No source URL for paper {paper_id}, skipping")
             continue
 
         # ---- Download ----
         pdf_path = await download_pdf(source_url)
         if not pdf_path:
-            logger.warning(f"Failed to download {paper_id}")
+            if abstract_text:
+                paper["full_text"] = abstract_text
+                paper["annotations"] = {"method": "abstract_fallback"}
+                paper_chunks = chunk_text(
+                    text=abstract_text,
+                    paper_id=paper_id,
+                    chunk_size=600,
+                    chunk_overlap=100,
+                )
+                all_chunks.extend(paper_chunks)
+                total_tokens += sum(c.get("token_count", 0) for c in paper_chunks)
+                extracted_count += 1
+                logger.warning(
+                    f"Failed to download {paper_id}; used abstract fallback ({len(paper_chunks)} chunks)"
+                )
+            else:
+                logger.warning(f"Failed to download {paper_id}")
             continue
 
         # ---- Extract ----
@@ -67,7 +120,23 @@ async def data_processing_node(
 
         full_text = extraction.get("full_text", "")
         if not full_text:
-            logger.warning(f"Empty extraction for {paper_id}")
+            if abstract_text:
+                paper["full_text"] = abstract_text
+                paper["annotations"] = {"method": "abstract_fallback"}
+                paper_chunks = chunk_text(
+                    text=abstract_text,
+                    paper_id=paper_id,
+                    chunk_size=600,
+                    chunk_overlap=100,
+                )
+                all_chunks.extend(paper_chunks)
+                total_tokens += sum(c.get("token_count", 0) for c in paper_chunks)
+                extracted_count += 1
+                logger.warning(
+                    f"Empty extraction for {paper_id}; used abstract fallback ({len(paper_chunks)} chunks)"
+                )
+            else:
+                logger.warning(f"Empty extraction for {paper_id}")
             continue
 
         # Update paper record
@@ -110,5 +179,6 @@ async def data_processing_node(
         "papers_screened": extracted_count,
         "chunks": all_chunks,
         "total_tokens_extracted": total_tokens,
+        "dual_extraction_performed": dual_extraction_performed,
         "audit_log": audit_log,
     }

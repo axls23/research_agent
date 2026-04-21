@@ -261,8 +261,19 @@ async def download_pdf(url: str, output_dir: str = "papers") -> str:
                 url, headers=headers, timeout=aiohttp.ClientTimeout(total=60)
             ) as resp:
                 if resp.status == 200:
+                    content_type = (resp.headers.get("Content-Type") or "").lower()
+                    payload = await resp.read()
+
+                    # Avoid storing HTML landing pages as .pdf files.
+                    is_pdf = "pdf" in content_type or payload.startswith(b"%PDF")
+                    if not is_pdf:
+                        logger.warning(
+                            f"URL did not return a PDF (content-type={content_type}) for {url}"
+                        )
+                        return ""
+
                     with open(output_path, "wb") as f:
-                        f.write(await resp.read())
+                        f.write(payload)
                     logger.info(f"Downloaded PDF to {output_path}")
                 else:
                     logger.error(f"Failed to download {url}: HTTP {resp.status}")

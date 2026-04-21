@@ -84,7 +84,7 @@ async def analysis_node(
             "the above into a 'Concept Canvas'. Be specific and cite the exact terms.\n\n"
             f"Show your reasoning for each step.{skill_rules}"
         )
-        # ---- GraphRAG Integration: Qdrant + Neo4j Context Retrieval ----
+        # ---- GraphRAG Integration: Neo4j Vector + Structural Traversal ----
         # Fetch deep structural context instead of just a flat list of entities
         graph_context = await _retrieve_graphrag_context(
             topic=state.get("research_topic", ""),
@@ -145,45 +145,48 @@ async def analysis_node(
 
 async def _retrieve_graphrag_context(topic: str, entities: List[Dict[str, Any]]) -> str:
     """
-    1. Embeds the topic and queries Qdrant to find semantic entry points.
+    1. Embeds the topic and queries Neo4j vector index to find semantic entry points.
     2. Queries Neo4j to find structural 2-hop relationships AND Hyperedge Intersections.
-    Falls back to a flat list of entities if either DB is unavailable.
+    Falls back to a flat list of entities if Neo4j is unavailable.
     """
     fallback_context = ", ".join([e.get("text", "") for e in entities[:50]])
-    qdrant_url = os.environ.get("QDRANT_URL")
-    qdrant_api_key = os.environ.get("QDRANT_API_KEY")
     neo4j_uri = os.environ.get("NEO4J_URI", "bolt://localhost:7687")
     neo4j_user = os.environ.get("NEO4J_USER", "neo4j")
     neo4j_password = os.environ.get("NEO4J_PASSWORD", "")
 
-    if not qdrant_url or not neo4j_password:
+    if not neo4j_password:
         return fallback_context  # Fallback to local entities
 
     try:
-        from qdrant_client import QdrantClient
         from sentence_transformers import SentenceTransformer
         from neo4j import GraphDatabase
 
-        # Step 1: Semantic Entry Points (Qdrant)
-        client = QdrantClient(url=qdrant_url, api_key=qdrant_api_key)
-        model = SentenceTransformer("BAAI/bge-small-en-v1.5")
+        # Step 1: Semantic Entry Points (Neo4j Vector Search)
+        model = SentenceTransformer("allenai/specter2_base")
         query_vector = model.encode([topic], show_progress_bar=False)[0].tolist()
 
-        search_result = client.search(
-            collection_name="research_entities",
-            query_vector=query_vector,
-            limit=5,
-        )
-        entry_texts = [r.payload.get("text") for r in search_result if r.payload]
-
-        if not entry_texts:
-            return fallback_context
-
-        # Step 2: Structural Traversal (Neo4j)
         driver = GraphDatabase.driver(neo4j_uri, auth=(neo4j_user, neo4j_password))
+        entry_texts = []
         graph_traces = []
 
         with driver.session() as session:
+            # Query Neo4j Native Vector Index
+            vector_result = session.run(
+                "CALL db.index.vector.queryNodes('prisma_embeddings', 5, $query_vector) "
+                "YIELD node, score "
+                "RETURN node.text AS text "
+                "ORDER BY score DESC",
+                query_vector=query_vector
+            )
+            for record in vector_result:
+                if record["text"]:
+                    entry_texts.append(record["text"])
+
+            if not entry_texts:
+                driver.close()
+                return fallback_context
+
+            # Step 2: Structural Traversal (Neo4j)
             for text in entry_texts:
                 
                 # NEXUS Hyperedge Intersection Query (Isomorphic Mapping)

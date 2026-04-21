@@ -41,6 +41,17 @@ interface SourceItem {
     excerpt: string;
 }
 
+interface StreamMetaPayload {
+    citations?: string[];
+    agentSteps?: AgentStep[];
+}
+
+interface StreamStatusPayload {
+    phase?: string;
+    stage?: string;
+    message?: string;
+}
+
 /* ────────────────── Mock Data ────────────────── */
 const MOCK_DOCS = [
     "Attention Is All You Need.pdf",
@@ -106,40 +117,147 @@ export default function ChatPage() {
         if (!input.trim()) return;
         const currentInput = input;
         const userMsg: Message = { id: crypto.randomUUID(), role: "user", content: currentInput };
+        const assistantId = crypto.randomUUID();
         setMessages((prev) => [...prev, userMsg]);
         setInput("");
         setIsTyping(true);
         setSources([]);
 
+        setMessages((prev) => [
+            ...prev,
+            {
+                id: assistantId,
+                role: "assistant",
+                content: "",
+                citations: [],
+                agentSteps: [],
+            },
+        ]);
+
+        const appendAssistantDelta = (delta: string) => {
+            if (!delta) return;
+            setMessages((prev) =>
+                prev.map((m) =>
+                    m.id === assistantId
+                        ? { ...m, content: `${m.content}${delta}` }
+                        : m,
+                ),
+            );
+        };
+
+        const seenStatusKeys = new Set<string>();
+
+        const appendAssistantStatus = (payload: StreamStatusPayload) => {
+            const stage = (payload.stage || "system").toUpperCase();
+            const message = payload.message || "Working...";
+            const key = `${payload.phase || "status"}:${stage}:${message}`;
+            if (seenStatusKeys.has(key)) return;
+            seenStatusKeys.add(key);
+
+            appendAssistantDelta(`\n\n[${stage}] ${message}`);
+        };
+
+        const patchAssistantMeta = (meta: StreamMetaPayload) => {
+            setMessages((prev) =>
+                prev.map((m) =>
+                    m.id === assistantId
+                        ? {
+                            ...m,
+                            citations: meta.citations ?? m.citations,
+                            agentSteps: meta.agentSteps ?? m.agentSteps,
+                        }
+                        : m,
+                ),
+            );
+        };
+
         try {
-            const response = await fetch("http://localhost:8000/api/chat", {
+            const response = await fetch("http://localhost:8000/api/chat/stream", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ message: currentInput })
             });
-            const data = await response.json();
+
+            if (!response.ok || !response.body) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = "";
+
+            const handleSseEvent = (rawEvent: string) => {
+                const lines = rawEvent.split(/\r?\n/);
+                let eventType = "message";
+                const dataLines: string[] = [];
+
+                for (const line of lines) {
+                    if (line.startsWith("event:")) {
+                        eventType = line.slice(6).trim();
+                    } else if (line.startsWith("data:")) {
+                        dataLines.push(line.slice(5).trim());
+                    }
+                }
+
+                if (dataLines.length === 0) {
+                    return;
+                }
+
+                let parsed: any = null;
+                try {
+                    parsed = JSON.parse(dataLines.join("\n"));
+                } catch {
+                    return;
+                }
+
+                if (eventType === "content") {
+                    appendAssistantDelta(parsed?.delta ?? "");
+                } else if (eventType === "status") {
+                    appendAssistantStatus(parsed ?? {});
+                } else if (eventType === "meta") {
+                    patchAssistantMeta(parsed ?? {});
+                    setSources(MOCK_SOURCES);
+                } else if (eventType === "error") {
+                    appendAssistantDelta(`\n\nError: ${parsed?.message ?? "Unknown error"}`);
+                }
+            };
+
+            while (true) {
+                const { value, done } = await reader.read();
+                if (done) break;
+
+                buffer += decoder.decode(value, { stream: true });
+                let splitIndex = buffer.indexOf("\n\n");
+                while (splitIndex !== -1) {
+                    const rawEvent = buffer.slice(0, splitIndex);
+                    buffer = buffer.slice(splitIndex + 2);
+                    handleSseEvent(rawEvent);
+                    splitIndex = buffer.indexOf("\n\n");
+                }
+            }
+
+            if (buffer.trim()) {
+                handleSseEvent(buffer);
+            }
 
             setIsTyping(false);
-            const aiMsg: Message = {
-                id: crypto.randomUUID(),
-                role: "assistant",
-                content: data.content || "Processing complete.",
-                citations: data.citations || [],
-                agentSteps: data.agentSteps || [],
-            };
-            setMessages((prev) => [...prev, aiMsg]);
-            setSources(MOCK_SOURCES); // Keeping mock sources visual layout to not modify UI too much
         } catch (error) {
             console.error("Failed to fetch from backend", error);
             setIsTyping(false);
-            const errorMsg: Message = {
-                id: crypto.randomUUID(),
-                role: "assistant",
-                content: "Sorry, I could not reach the backend API. Please make sure the server is running on port 8000.",
-                citations: [],
-                agentSteps: []
-            };
-            setMessages((prev) => [...prev, errorMsg]);
+            setMessages((prev) =>
+                prev.map((m) =>
+                    m.id === assistantId
+                        ? {
+                            ...m,
+                            content:
+                                m.content ||
+                                "Sorry, I could not reach the backend API. Please make sure the server is running on port 8000.",
+                            citations: m.citations ?? [],
+                            agentSteps: m.agentSteps ?? [],
+                        }
+                        : m,
+                ),
+            );
         }
     };
 

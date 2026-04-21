@@ -15,6 +15,7 @@ import copy
 import logging
 import os
 import time
+import uuid
 from typing import Any, Dict, List, Optional
 
 from core.state import make_initial_state
@@ -357,14 +358,14 @@ to specialized subagents and tools.
   performs PICO decomposition, and screens papers.
 - **data-processing**: Processes PDF papers into text chunks for analysis.
 - **knowledge-graph**: Extracts PRISMA-aligned entities using GLiNER + LLM, builds
-  the Neo4j reasoning graph, and stores embeddings in Qdrant.
+  the Neo4j reasoning graph, and stores embeddings using native Neo4j Vectors.
 - **analysis**: Analyzes extracted evidence -- descriptive stats, LLM synthesis,
   and GraphRAG context retrieval.
 - **writing**: Drafts academic sections and detects evidence gaps.
 
 ## Available Tools
-- `qdrant_search(query, prisma_label, limit)` -- Search for semantically similar
-  entities in the PRISMA knowledge base. Filter by label (objective, methodology,
+- `neo4j_vector_search(query, prisma_label, limit)` -- Search for semantically similar
+  entities in the PRISMA knowledge base using Neo4j native vector search. Filter by label (objective, methodology,
   result, limitation, implication).
 - `neo4j_query(cypher, params)` -- Run Cypher queries against the PRISMA graph.
   Use for structured reasoning paths like:
@@ -372,17 +373,23 @@ to specialized subagents and tools.
 - `validate_quality(stage, state_snapshot)` -- Validate pipeline output quality.
 
 ## Research Workflow
+0. **Plan (Mandatory)**: Call `deep-reasoner` first to create a concise execution plan
+    before delegating retrieval and extraction tasks.
 1. **Search**: Delegate literature search with PICO-decomposed queries
 2. **Process**: Convert found papers into analysable chunks
 3. **Extract**: Build PRISMA knowledge graph from chunks
-4. **Assess Coverage**: Use qdrant_search to check coverage per PRISMA domain.
+4. **Assess Coverage**: Use neo4j_vector_search to check coverage per PRISMA domain.
    If any domain has < 3 entities, search for MORE papers on that specific domain.
 5. **Analyze**: Run evidence synthesis and pattern detection
 6. **Write**: Draft sections, check for evidence gaps
-7. **Iterate**: If gaps found, loop back to search with refined queries
+7. **Reasoning QA (Mandatory)**: Call `deep-reasoner` to perform a final
+    consistency check before returning the answer.
+8. **Iterate**: If gaps found, loop back to search with refined queries
 
 ## Key Principles
-- Always check coverage BEFORE analysis. Use qdrant_search with prisma_label filters.
+- Always check coverage BEFORE analysis. Use neo4j_vector_search with prisma_label filters.
+- Treat `deep-reasoner` as the control-plane reasoning subagent:
+    use it for planning and final validation.
 - If methodology coverage is thin, explicitly search for methodology-focused papers.
 - Use neo4j_query to verify reasoning paths exist before synthesis.
 - Cap total iterations at {max_iterations}. Prefer depth over breadth.
@@ -411,7 +418,7 @@ SUBAGENT_PROMPTS = {
     "analysis": (
         "You are a systematic review analyst. Analyze extracted PRISMA entities to "
         "identify patterns, contradictions, and gaps. Use GraphRAG retrieval "
-        "(qdrant_search -> neo4j_query) to build rich context before synthesis."
+        "(neo4j_vector_search -> neo4j_query) to build rich context before synthesis."
     ),
     "writing": (
         "You are an academic writing specialist drafting sections for a systematic review. "
@@ -431,74 +438,108 @@ SUBAGENT_PROMPTS = {
 # ---------------------------------------------------------------------------
 
 
-def _build_subagent_configs(global_model: str = "openai:Qwen/Qwen2.5-1.5B-Instruct") -> List[Dict[str, Any]]:
+def _build_subagent_configs(global_model: str = "ollama:qwen2.5:3b") -> List[Dict[str, Any]]:
     """Build subagent configuration dicts for create_deep_agent."""
     from core.agent_tools import (
         search_literature,
         process_documents,
         extract_prisma_knowledge,
-        qdrant_search,
+        neo4j_vector_search,
         neo4j_query,
         analyze_evidence,
         draft_section,
         validate_quality,
     )
     
-    # Subagents use a fast, concurrent vLLM server by default (Port 8000 via OpenAI provider).
-    vllm_model = "openai:Qwen/Qwen2.5-0.5B"
-    
-    # We always include a deep-reasoner powered by Fast-RLM (Python enabled)
-    from core.llm_provider import ChatFastRLM
-    import os
-    rlm_llm = ChatFastRLM(
-        model_name=os.getenv("RLM_PRIMARY_MODEL", "Qwen/Qwen2.5-0.5B"),
-        temperature=0.7
-    )
+    # Route all subagents through the selected global model by default,
+    # using concrete chat model instances where possible.
+    subagent_model: Any = global_model
+    deep_reasoner_model: Any = global_model
 
-    return [
+    model_name = global_model.split(":", 1)[1] if ":" in global_model else global_model
+    model_lower = global_model.lower()
+
+    if "ollama" in model_lower:
+        from langchain_ollama import ChatOllama
+
+        base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+        if base_url.endswith("/v1"):
+            base_url = base_url[:-3]
+        ollama_llm = ChatOllama(model=model_name, base_url=base_url)
+        subagent_model = ollama_llm
+        deep_reasoner_model = ollama_llm
+    elif "groq" in model_lower:
+        from langchain_groq import ChatGroq
+
+        groq_llm = ChatGroq(model=model_name, api_key=os.environ.get("GROQ_API_KEY", ""))
+        subagent_model = groq_llm
+        deep_reasoner_model = groq_llm
+    elif "fast_rlm" in model_lower or "fast-rlm" in model_lower:
+        from core.llm_provider import ChatFastRLM
+
+        deep_reasoner_model = ChatFastRLM(
+            model_name=os.getenv("RLM_PRIMARY_MODEL", "Qwen/Qwen2.5-0.5B"),
+            temperature=0.7,
+        )
+        subagent_model = deep_reasoner_model
+
+    subagents = [
         {
             "name": "deep-reasoner",
             "description": "Call this agent for complex reasoning, math, or tasks requiring Python code execution.",
             "system_prompt": SUBAGENT_PROMPTS["reasoning"],
-            "model": rlm_llm,
+            "model": deep_reasoner_model,
             "tools": [validate_quality],
         },
         {
             "name": "literature-search",
             "description": "Search academic databases with PICO decomposition and LLM screening.",
             "system_prompt": SUBAGENT_PROMPTS["literature"],
-            "model": vllm_model,
+            "model": subagent_model,
             "tools": [search_literature, validate_quality],
         },
         {
             "name": "data-processing",
             "description": "Process research papers into text chunks.",
             "system_prompt": SUBAGENT_PROMPTS["data_processing"],
-            "model": vllm_model,
+            "model": subagent_model,
             "tools": [process_documents],
         },
         {
             "name": "knowledge-graph",
-            "description": "Extract PRISMA entities and build Neo4j/Qdrant stores.",
+            "description": "Extract PRISMA entities and build Neo4j reasoning graphs.",
             "system_prompt": SUBAGENT_PROMPTS["knowledge_graph"],
-            "model": vllm_model,
-            "tools": [extract_prisma_knowledge, qdrant_search, neo4j_query],
+            "model": subagent_model,
+            "tools": [extract_prisma_knowledge, neo4j_vector_search, neo4j_query],
         },
         {
             "name": "analysis",
             "description": "Analyze evidence with GraphRAG retrieval and LLM synthesis.",
             "system_prompt": SUBAGENT_PROMPTS["analysis"],
-            "model": vllm_model,
-            "tools": [analyze_evidence, qdrant_search, neo4j_query],
+            "model": subagent_model,
+            "tools": [analyze_evidence, neo4j_vector_search, neo4j_query],
         },
         {
             "name": "writing",
             "description": "Draft academic sections and detect evidence gaps.",
             "system_prompt": SUBAGENT_PROMPTS["writing"],
-            "model": vllm_model,
-            "tools": [draft_section, qdrant_search, validate_quality],
+            "model": subagent_model,
+            "tools": [draft_section, neo4j_vector_search, validate_quality],
         },
     ]
+
+    # Visibility for presentation/debugging: confirms subagents are configured and live.
+    summary = []
+    for cfg in subagents:
+        model_ref = cfg.get("model")
+        if isinstance(model_ref, str):
+            model_desc = model_ref
+        else:
+            model_desc = type(model_ref).__name__
+        summary.append(f"{cfg.get('name')}={model_desc}")
+    logger.info("Subagents configured: %s", ", ".join(summary))
+
+    return subagents
 
 
 # ---------------------------------------------------------------------------
@@ -507,7 +548,7 @@ def _build_subagent_configs(global_model: str = "openai:Qwen/Qwen2.5-1.5B-Instru
 
 
 def build_orchestrator(
-    model: str = "groq:llama-3.3-70b-versatile",
+    model: str = "ollama:qwen2.5:3b",
     model_provider: Optional[str] = None,
 ) -> Any:
     """
@@ -522,7 +563,7 @@ def build_orchestrator(
     Returns:
         A compiled agent ready for .invoke() or .ainvoke().
     """
-    from core.agent_tools import qdrant_search, neo4j_query, validate_quality
+    from core.agent_tools import neo4j_vector_search, neo4j_query, validate_quality
 
     subagents = _build_subagent_configs(global_model=model)
 
@@ -537,14 +578,19 @@ def build_orchestrator(
         
         agent_kwargs: Dict[str, Any] = {
             "system_prompt": ORCHESTRATOR_SYSTEM_PROMPT,
-            "tools": [qdrant_search, neo4j_query, validate_quality],
+            "tools": [neo4j_vector_search, neo4j_query, validate_quality],
             "subagents": subagents,
         }
 
         # If provider is explicitly groq, or model string contains groq,
         # instantiate ChatGroq and pass it as the model instance.
-        provider = model_provider or ("groq" if "groq" in model.lower() else None)
-        model_name = model.split(":")[-1] if ":" in model else model
+        provider = model_provider
+        if provider is None:
+            if "groq" in model.lower():
+                provider = "groq"
+            elif "ollama" in model.lower():
+                provider = "ollama"
+        model_name = model.split(":", 1)[1] if ":" in model else model
 
         if provider == "groq":
             from langchain_groq import ChatGroq
@@ -565,6 +611,16 @@ def build_orchestrator(
                 api_key="dummy"
             )
             agent_kwargs["model"] = llm
+        elif provider == "ollama" or model.lower().startswith("ollama:"):
+            from langchain_ollama import ChatOllama
+            base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+            if base_url.endswith("/v1"):
+                base_url = base_url[:-3]
+            llm = ChatOllama(
+                model=model_name,
+                base_url=base_url,
+            )
+            agent_kwargs["model"] = llm
         else:
 
             # Fallback to passing the generic string for liteLLM
@@ -581,10 +637,10 @@ def build_orchestrator(
         return _build_langgraph_react_fallback(model)
 
 
-def _build_langgraph_react_fallback(model: str = "llama-3.3-70b-versatile") -> Any:
+def _build_langgraph_react_fallback(model: str = "ollama:qwen2.5:3b") -> Any:
     """Fallback ReAct agent using LangGraph create_react_agent."""
     from core.agent_tools import (
-        qdrant_search,
+        neo4j_vector_search,
         neo4j_query,
         validate_quality,
         search_literature,
@@ -597,7 +653,7 @@ def _build_langgraph_react_fallback(model: str = "llama-3.3-70b-versatile") -> A
     try:
         from langgraph.prebuilt import create_react_agent
         
-        model_name = model.split(":")[-1] if ":" in model else model
+        model_name = model.split(":", 1)[1] if ":" in model else model
         
         if "airllm" in model.lower():
             from langchain_core.language_models.chat_models import BaseChatModel
@@ -655,6 +711,15 @@ def _build_langgraph_react_fallback(model: str = "llama-3.3-70b-versatile") -> A
                 base_url="http://172.30.177.136:8000/v1",
                 api_key="dummy"
             )
+        elif "ollama" in model.lower():
+            from langchain_ollama import ChatOllama
+            base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+            if base_url.endswith("/v1"):
+                base_url = base_url[:-3]
+            llm = ChatOllama(
+                model=model_name,
+                base_url=base_url,
+            )
         else:
             from langchain_groq import ChatGroq
             llm = ChatGroq(
@@ -665,7 +730,7 @@ def _build_langgraph_react_fallback(model: str = "llama-3.3-70b-versatile") -> A
         agent = create_react_agent(
             llm,
             [
-                qdrant_search,
+                neo4j_vector_search,
                 neo4j_query,
                 search_literature,
                 process_documents,
@@ -694,6 +759,7 @@ async def run_agentic_pipeline(
     research_topic: str,
     research_goals: List[str],
     model: Optional[str] = None,
+    rigor_level: str = "exploratory",
 ) -> Dict[str, Any]:
     """
     Run the research pipeline in agentic mode using ReAct reasoning.
@@ -704,43 +770,158 @@ async def run_agentic_pipeline(
         research_goals: List of specific research objectives.
         model: Optional override model identifier.
     """
-    if model is None:
+    configured_model = None
+    try:
         import yaml
         from pathlib import Path
+
         path = Path("config/config.yaml")
         if path.exists():
-            with open(path) as f:
+            with open(path, encoding="utf-8") as f:
                 cfg = yaml.safe_load(f) or {}
-                # Extract fast_rlm setting if present
-                provider = cfg.get("llm", {}).get("tiers", {}).get("deep", {}).get("provider", "groq")
-                if provider == "fast_rlm":
-                    model = "fast_rlm:primary"
-                else:
-                    model = "groq:llama-3.3-70b-versatile"
+            configured_model = (
+                cfg.get("llm", {}).get("tiers", {}).get("deep", {}).get("model")
+                or cfg.get("llm", {}).get("model")
+            )
+    except Exception:
+        configured_model = None
+
+    default_ollama_model = os.getenv("OLLAMA_MODEL") or configured_model or "qwen2.5:3b"
+
+    if model:
+        requested = model.strip()
+        lowered = requested.lower()
+
+        if lowered.startswith("ollama:"):
+            model = requested
+        elif ":" in requested:
+            prefix = requested.split(":", 1)[0].lower()
+            known_providers = {
+                "groq",
+                "fast_rlm",
+                "fast-rlm",
+                "openai",
+                "anthropic",
+                "airllm",
+                "ollama",
+            }
+            if prefix in known_providers and prefix != "ollama":
+                logger.warning(
+                    "Non-ollama agentic model '%s' requested; forcing Ollama model 'ollama:%s'.",
+                    requested,
+                    default_ollama_model,
+                )
+                model = f"ollama:{default_ollama_model}"
+            elif prefix == "ollama":
+                model = requested
+            else:
+                # Handles model tags like qwen2.5:3b that are valid Ollama names.
+                model = f"ollama:{requested}"
         else:
-            model = "groq:llama-3.3-70b-versatile"
+            model = f"ollama:{requested}"
+    else:
+        model = f"ollama:{default_ollama_model}"
+
+    logger.info("Agentic model resolved to %s", model)
+
+    resolved_rigor = (rigor_level or "exploratory").strip().lower()
+    if resolved_rigor not in {"exploratory", "prisma", "cochrane"}:
+        logger.warning("Unknown rigor level '%s'; defaulting to exploratory", rigor_level)
+        resolved_rigor = "exploratory"
+
+    from core.agent_tools import begin_agentic_run, finish_agentic_run
+
+    run_id = str(uuid.uuid4())
+    previous_run_id = os.getenv("AGENTIC_RUN_ID")
+    previous_rigor = os.getenv("RESEARCH_AGENT_RIGOR")
+
+    begin_agentic_run(run_id)
+    os.environ["AGENTIC_RUN_ID"] = run_id
+    os.environ["RESEARCH_AGENT_RIGOR"] = resolved_rigor
+    os.environ.setdefault("AGENTIC_FAIL_CLOSED", "true")
 
     orchestrator = build_orchestrator(model=model)
+
+    workflow_instruction = (
+        "Follow a rapid exploratory workflow."
+        if resolved_rigor == "exploratory"
+        else (
+            "Follow the Cochrane workflow with strict methodological checks."
+            if resolved_rigor == "cochrane"
+            else "Follow the PRISMA 2020 workflow with strict validation gates."
+        )
+    )
 
     user_message = (
         f"Conduct a systematic literature review on: {research_topic}\n\n"
         f"Project: {project_name}\n"
         f"Research Goals:\n"
         + "\n".join(f"  - {g}" for g in research_goals)
-        + "\n\nFollow the PRISMA 2020 workflow. Start by searching for "
+        + f"\n\nRigor Level: {resolved_rigor}\n"
+                + "Mandatory execution order: call deep-reasoner first for a short plan, "
+                    "then run stage subagents, and call deep-reasoner again for final QA. "
+        + workflow_instruction
+        + " Start by searching for "
         "literature, then process, extract, analyze, and write. "
         "Check coverage after extraction and loop back if needed."
     )
 
+    stage_summary: Dict[str, Any] = {"started_at": None, "stages": {}}
     try:
-        result = await orchestrator.ainvoke(
-            {"messages": [{"role": "user", "content": user_message}]}
-        )
-        logger.info("Agentic pipeline completed")
-        return result
-    except AttributeError:
-        result = orchestrator.invoke(
-            {"messages": [{"role": "user", "content": user_message}]}
-        )
-        logger.info("Agentic pipeline completed (sync)")
-        return result
+        try:
+            result = await orchestrator.ainvoke(
+                {"messages": [{"role": "user", "content": user_message}]}
+            )
+            logger.info("Agentic pipeline completed")
+        except AttributeError:
+            result = orchestrator.invoke(
+                {"messages": [{"role": "user", "content": user_message}]}
+            )
+            logger.info("Agentic pipeline completed (sync)")
+    finally:
+        stage_summary = finish_agentic_run(run_id)
+
+        if previous_run_id is None:
+            os.environ.pop("AGENTIC_RUN_ID", None)
+        else:
+            os.environ["AGENTIC_RUN_ID"] = previous_run_id
+
+        if previous_rigor is None:
+            os.environ.pop("RESEARCH_AGENT_RIGOR", None)
+        else:
+            os.environ["RESEARCH_AGENT_RIGOR"] = previous_rigor
+
+    fail_closed = (os.getenv("AGENTIC_FAIL_CLOSED") or "true").strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
+    if resolved_rigor in {"prisma", "cochrane"} and fail_closed:
+        required_stages = ["literature_review", "data_processing", "analysis"]
+        stages = stage_summary.get("stages", {})
+
+        missing_stages = [stage for stage in required_stages if stage not in stages]
+        failed_stages: List[str] = []
+
+        for stage in required_stages:
+            stage_info = stages.get(stage) or {}
+            validation = stage_info.get("validation") or {}
+            if not validation.get("passed", False):
+                issues = validation.get("issues") or ["validation did not pass"]
+                failed_stages.append(f"{stage}: {'; '.join(str(i) for i in issues)}")
+
+        if missing_stages or failed_stages:
+            detail_parts = []
+            if missing_stages:
+                detail_parts.append(f"missing stages={missing_stages}")
+            if failed_stages:
+                detail_parts.append(f"failed validations={failed_stages}")
+            raise RuntimeError(
+                "Fail-closed agentic rigor enforcement triggered: "
+                + " | ".join(detail_parts)
+            )
+
+    if isinstance(result, dict):
+        result["agentic_validation"] = stage_summary
+    return result

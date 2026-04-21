@@ -2,7 +2,7 @@
 core/tools/search_tools.py
 ==========================
 Paper search across multiple databases: ArXiv, Semantic Scholar, Crossref.
-Wraps existing paperconstructor.Arxiv and adds new API integrations.
+Uses standard academic APIs for discovery.
 """
 
 from __future__ import annotations
@@ -61,7 +61,7 @@ class PaperMeta:
 
 
 # ---------------------------------------------------------------------------
-# ArXiv search (wraps existing paperconstructor + arxiv library)
+# ArXiv search (standard library integration)
 # ---------------------------------------------------------------------------
 
 
@@ -129,7 +129,7 @@ async def search_semantic_scholar(
     params = {
         "query": query,
         "limit": min(max_results, 100),
-        "fields": "paperId,title,authors,year,abstract,url,externalIds",
+        "fields": "paperId,title,authors,year,abstract,url,externalIds,openAccessPdf,isOpenAccess",
     }
 
     try:
@@ -145,6 +145,8 @@ async def search_semantic_scholar(
 
         for item in data.get("data", []):
             ext = item.get("externalIds") or {}
+            oa_pdf = item.get("openAccessPdf") or {}
+            source_url = oa_pdf.get("url") or item.get("url") or ""
             papers.append(
                 PaperMeta(
                     paper_id=ext.get("DOI") or item.get("paperId", ""),
@@ -152,7 +154,7 @@ async def search_semantic_scholar(
                     authors=[a.get("name", "") for a in (item.get("authors") or [])],
                     year=item.get("year"),
                     abstract=item.get("abstract") or "",
-                    source_url=item.get("url") or "",
+                    source_url=source_url,
                     database="semantic_scholar",
                 )
             )
@@ -183,7 +185,7 @@ async def search_crossref(
     params = {
         "query": query,
         "rows": min(max_results, 100),
-        "select": "DOI,title,author,published-print,abstract,URL",
+        "select": "DOI,title,author,published-print,published-online,abstract,URL,link",
     }
     headers = {
         "User-Agent": "ResearchAgent/1.0 (mailto:research@example.com)",
@@ -212,6 +214,17 @@ async def search_crossref(
             if pub.get("date-parts"):
                 year = pub["date-parts"][0][0] if pub["date-parts"][0] else None
 
+            links = item.get("link") or []
+            pdf_link = ""
+            for link in links:
+                link_url = link.get("URL", "")
+                content_type = (link.get("content-type") or "").lower()
+                if "pdf" in content_type or link_url.lower().endswith(".pdf"):
+                    pdf_link = link_url
+                    break
+
+            source_url = pdf_link or item.get("URL") or ""
+
             papers.append(
                 PaperMeta(
                     paper_id=item.get("DOI", ""),
@@ -222,7 +235,7 @@ async def search_crossref(
                     ],
                     year=year,
                     abstract=item.get("abstract") or "",
-                    source_url=item.get("URL") or "",
+                    source_url=source_url,
                     database="crossref",
                 )
             )

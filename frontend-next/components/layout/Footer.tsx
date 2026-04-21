@@ -37,6 +37,13 @@ export default function Footer() {
                             {label}
                         </Link>
                     ))}
+                        <Link
+                            href="/backend"
+                            className="text-xs transition-colors duration-200 hover:text-white"
+                            style={{ color: "var(--text-muted)" }}
+                        >
+                            Backend Monitor
+                        </Link>
                     <a
                         href="https://github.com"
                         target="_blank"

@@ -1,7 +1,7 @@
 """Analysis Agent — systematic review analysis using GraphRAG retrieval
 and LLM synthesis via the Deep Agents subagent pattern.
 
-Connects Qdrant (semantic entry points) and Neo4j (reasoning paths)
+Connects Neo4j Vector Index (semantic entry points) and Neo4j (reasoning paths)
 for rich context before analysis.
 """
 
@@ -12,7 +12,7 @@ from typing import Any, Dict, List
 from core.base_agent import ResearchAgent
 from core.agent_tools import (
     analyze_evidence,
-    qdrant_search,
+    neo4j_vector_search,
     neo4j_query,
 )
 
@@ -20,12 +20,12 @@ from core.agent_tools import (
 class AnalysisAgent(ResearchAgent):
     """Agent for evidence analysis, pattern detection, and synthesis.
 
-    In agentic mode, uses GraphRAG retrieval (Qdrant → Neo4j) to build
+    In agentic mode, uses GraphRAG retrieval (Neo4j Vector → Neo4j Graph) to build
     rich context before running LLM-based synthesis with extended thinking.
 
     Supported actions:
       - ``analyze``               — full analysis pipeline
-      - ``graphrag_retrieve``     — Qdrant → Neo4j context retrieval
+      - ``graphrag_retrieve``     — Neo4j Vector → Neo4j Graph context retrieval
       - ``explore_data``          — descriptive statistics
     """
 
@@ -71,11 +71,11 @@ class AnalysisAgent(ResearchAgent):
         return await analyze_evidence(entities, topic, papers=papers, llm=self.llm)
 
     async def _graphrag_retrieve(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        """Retrieve GraphRAG context: Qdrant entry → Neo4j traversal."""
+        """Retrieve GraphRAG context: Neo4j Vector entry → Neo4j traversal."""
         topic = data.get("topic", "")
 
-        # Step 1: Semantic entry points from Qdrant
-        entry_points = qdrant_search(topic, limit=5)
+        # Step 1: Semantic entry points from Neo4j Vector Index
+        entry_points = neo4j_vector_search(topic, limit=5)
         entry_texts = [r["text"] for r in entry_points]
 
         if not entry_texts:

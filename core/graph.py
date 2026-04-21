@@ -289,7 +289,7 @@ async def run_research_pipeline(
     llm: Optional[LLMProvider] = None,
     interactive: bool = True,
     config_path: str = "config/config.yaml",
-    mode: Literal["deterministic", "agentic"] = "deterministic",
+    mode: str = "agentic",
     agentic_model: Optional[str] = None,
 ) -> ResearchState:
     """
@@ -297,8 +297,8 @@ async def run_research_pipeline(
 
     Args:
         mode: Pipeline execution mode.
-            - "deterministic": Fixed StateGraph pipeline (default, backward-compatible)
-            - "agentic": ReAct orchestrator with Deep Agents (agent decides flow)
+            - "agentic": ReAct orchestrator with Deep Agents (enforced for exploratory)
+            - "default"/"langgraph": eagerly executed for prisma/cochrane
 
     Usage::
 
@@ -307,77 +307,49 @@ async def run_research_pipeline(
             research_topic="Machine Learning in Healthcare",
             research_goals=["accuracy", "interpretability"],
             rigor_level="prisma",
-            mode="agentic",  # <-- ReAct agent loop
         )
     """
-    # ---- Agentic Mode: ReAct Orchestrator ----
-    if mode == "agentic":
+    requested_mode = (mode or "agentic").lower()
+
+    if rigor_level == "exploratory":
+        if requested_mode != "agentic":
+            logger.warning(
+                "Mode '%s' requested, but exploratory mode routes to agentic execution. Routing to agentic mode.",
+                requested_mode,
+            )
         from core.orchestrator import run_agentic_pipeline
 
-        logger.info(f"Starting AGENTIC pipeline: {project_name} ({rigor_level})")
+        logger.info(f"Starting AGENTIC pipeline for EXPLORATORY: {project_name}")
         result = await run_agentic_pipeline(
             project_name=project_name,
             research_topic=research_topic,
             research_goals=research_goals,
             model=agentic_model,
+            rigor_level=rigor_level,
         )
         logger.info("Agentic pipeline complete!")
         return result
-
-    # ---- Deterministic Mode: StateGraph (default) ----
-    import uuid
-
-    # Create LLM providers (tiered routing)
-    if llm is None:
-        try:
-            tiers = create_tiered_providers(config_path)
-            llm_fast = tiers.get("fast")
-            llm_deep = tiers.get("deep")
-            agent_tiers = tiers.get("agent_tiers", {})
-            # Use deep as the default / backward-compatible "llm"
-            llm = llm_deep
-            logger.info(
-                f"Tiered routing active: "
-                f"fast={getattr(llm_fast, 'model', '?')}, "
-                f"deep={getattr(llm_deep, 'model', '?')}"
-            )
-        except Exception as e:
-            logger.warning(f"Failed to create tiered providers: {e}")
-            llm_fast = None
-            llm_deep = None
-            agent_tiers = {}
     else:
-        # Custom LLM passed — use it for everything
-        llm_fast = llm
-        llm_deep = llm
-        agent_tiers = {}
-
-    # Build initial state
-    initial_state = make_initial_state(
-        project_id=str(uuid.uuid4())[:8],
-        project_name=project_name,
-        research_topic=research_topic,
-        research_goals=research_goals,
-        rigor_level=rigor_level,
-    )
-
-    # Build and compile graph
-    graph = build_research_graph(rigor_level=rigor_level)
-
-    # Run — pass tiered LLMs through config so each node picks the right one
-    config = {
-        "configurable": {
-            "llm": llm,  # backward-compatible default
-            "llm_fast": llm_fast,  # 8B — screening, queries, validation
-            "llm_deep": llm_deep,  # 70B — synthesis, analysis, writing
-            "agent_tiers": agent_tiers,
-            "interactive": interactive,
-            "output_dir": "outputs",
+        logger.info(f"Starting DETERMINISTIC Eager pipeline for STRICT rigor ({rigor_level}): {project_name}")
+        
+        # Initialize initial state
+        initial_state: ResearchState = {
+            "project_name": project_name,
+            "research_topic": research_topic,
+            "research_goals": research_goals,
+            "rigor_level": rigor_level,
+            "papers": [],
+            "chunks": [],
+            "knowledge_entities": [],
+            "hyperedges": [],
+            "audit_log": [],
         }
-    }
 
-    logger.info(f"Starting DETERMINISTIC pipeline: {project_name} ({rigor_level})")
-    result = await graph.ainvoke(initial_state, config=config)
-    logger.info("Pipeline complete!")
-
-    return result
+        # Build eager graph
+        runner = build_research_graph(rigor_level=rigor_level)
+        
+        # Execute logic locally using EagerGraphRunner
+        final_state = await runner.invoke(initial_state, config={"configurable": {"llm_deep": getattr(llm, "provider", None) if llm else None}})
+        
+        logger.info(f"Deterministic pipeline complete for {project_name}.")
+        return final_state

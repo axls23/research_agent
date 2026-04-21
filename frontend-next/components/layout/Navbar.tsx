@@ -4,13 +4,14 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { BrainCircuit, Menu, X, Upload, MessageSquare, GitBranch, BookOpen } from "lucide-react";
+import { BrainCircuit, Menu, X, Upload, MessageSquare, GitBranch, BookOpen, Activity } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const navLinks = [
     { href: "/", label: "Home" },
     { href: "/upload", label: "Upload", icon: Upload },
     { href: "/chat", label: "Research Chat", icon: MessageSquare },
+    { href: "/backend", label: "Backend Monitor", icon: Activity },
     { href: "/workflow", label: "Workflow", icon: GitBranch },
     { href: "/about", label: "Architecture", icon: BookOpen },
 ];

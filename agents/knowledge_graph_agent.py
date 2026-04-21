@@ -2,7 +2,7 @@
 and traversal using Deep Agents subagent pattern.
 
 Wraps the 2-tier extraction pipeline (GLiNER + LLM) and provides
-Qdrant/Neo4j query capabilities for agentic reasoning.
+Neo4j Vector/Graph query capabilities for agentic reasoning.
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional
 from core.base_agent import ResearchAgent
 from core.agent_tools import (
     extract_prisma_knowledge,
-    qdrant_search,
+    neo4j_vector_search,
     neo4j_query,
 )
 
@@ -23,13 +23,13 @@ class KnowledgeGraphAgent(ResearchAgent):
     In agentic mode, this agent's methods are exposed as tools to the
     orchestrator's ReAct loop. The agent can:
       - Extract entities aligned with PRISMA 2020 ontology
-      - Query Qdrant for semantically similar entities (with PRISMA label filter)
+      - Query Neo4j Vector for semantically similar entities (with PRISMA label filter)
       - Traverse Neo4j graph for structured reasoning paths
       - Check coverage per PRISMA domain before analysis
 
     Supported actions:
       - ``extract_knowledge``   — run 2-tier extraction (GLiNER + LLM)
-      - ``search_entities``     — semantic search in Qdrant
+      - ``search_entities``     — semantic search in Neo4j Vectors
       - ``query_graph``         — Cypher traversal in Neo4j
       - ``check_coverage``      — assess entity coverage per PRISMA domain
     """
@@ -40,7 +40,7 @@ class KnowledgeGraphAgent(ResearchAgent):
             description=(
                 "Builds and queries a PRISMA 2020-aligned knowledge graph "
                 "using GLiNER + LLM extraction, Neo4j reasoning graph, "
-                "and Qdrant semantic retrieval."
+                "and Neo4j Vector semantic retrieval."
             ),
             llm=llm,
         )
@@ -79,7 +79,7 @@ class KnowledgeGraphAgent(ResearchAgent):
         return await extract_prisma_knowledge(chunks, llm=self.llm)
 
     async def _search_entities(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        """Search Qdrant for semantically similar PRISMA entities."""
+        """Search Neo4j Vectors for semantically similar PRISMA entities."""
         query = data.get("query", "")
         prisma_label = data.get("prisma_label")
         limit = data.get("limit", 10)
@@ -87,7 +87,7 @@ class KnowledgeGraphAgent(ResearchAgent):
         self.logger.info(
             f"Searching entities: {query!r} " f"(label={prisma_label}, limit={limit})"
         )
-        results = qdrant_search(query, prisma_label=prisma_label, limit=limit)
+        results = neo4j_vector_search(query, prisma_label=prisma_label, limit=limit)
         return {"status": "completed", "results": results, "count": len(results)}
 
     async def _query_graph(self, data: Dict[str, Any]) -> Dict[str, Any]:
@@ -123,7 +123,7 @@ class KnowledgeGraphAgent(ResearchAgent):
         thin_domains: List[str] = []
 
         for label in prisma_labels:
-            results = qdrant_search(topic, prisma_label=label, limit=20)
+            results = neo4j_vector_search(topic, prisma_label=label, limit=20)
             coverage[label] = len(results)
             if len(results) < min_threshold:
                 thin_domains.append(label)

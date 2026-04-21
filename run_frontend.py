@@ -1,81 +1,98 @@
-"""
-Frontend Runner
-Quick script to run the frontend with a simple HTTP server
-"""
+"""Frontend runner supporting Next.js (`frontend-next`) and legacy static frontend."""
 
 import http.server
-import socketserver
 import os
-import webbrowser
+import shutil
+import socketserver
+import subprocess
 import threading
 import time
+import webbrowser
 from pathlib import Path
 
-# Configuration
-PORT = 8080
-DIRECTORY = "frontend"
+ROOT = Path(__file__).parent.resolve()
+NEXT_DIR = ROOT / "frontend-next"
+LEGACY_DIR = ROOT / "frontend"
 
 
-class MyHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
+def _open_browser_delayed(url: str, delay: float = 2.0) -> None:
+    time.sleep(delay)
+    print(f"Opening browser at: {url}")
+    webbrowser.open(url)
+
+
+def _run_next_frontend() -> int:
+    npm = shutil.which("npm")
+    if not npm:
+        print("Error: npm was not found in PATH.")
+        print("Install Node.js (includes npm) to run frontend-next.")
+        return 1
+
+    if not (NEXT_DIR / "package.json").exists():
+        print("Error: frontend-next/package.json not found.")
+        return 1
+
+    port = os.getenv("FRONTEND_PORT", "3000")
+    url = f"http://localhost:{port}"
+
+    if not (NEXT_DIR / "node_modules").exists():
+        print("Installing frontend-next dependencies (first run)...")
+        install_rc = subprocess.call([npm, "install"], cwd=str(NEXT_DIR))
+        if install_rc != 0:
+            print("Error: npm install failed.")
+            return install_rc
+
+    print(f"Starting Next.js frontend on {url}")
+    print("Press Ctrl+C to stop the server")
+
+    browser_thread = threading.Thread(target=_open_browser_delayed, args=(url,))
+    browser_thread.daemon = True
+    browser_thread.start()
+
+    return subprocess.call([npm, "run", "dev", "--", "--port", port], cwd=str(NEXT_DIR))
+
+
+class _LegacyHandler(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
-        super().__init__(*args, directory=DIRECTORY, **kwargs)
+        super().__init__(*args, directory=str(LEGACY_DIR), **kwargs)
 
     def end_headers(self):
-        # Add CORS headers for API calls
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         super().end_headers()
 
 
-def run_server():
-    """Run the HTTP server"""
-    with socketserver.TCPServer(("", PORT), MyHTTPRequestHandler) as httpd:
-        print(f"Server running at http://localhost:{PORT}/")
-        print("Serving files from: " + os.path.abspath(DIRECTORY))
-        httpd.serve_forever()
+def _run_legacy_frontend() -> int:
+    if not LEGACY_DIR.exists():
+        print("Error: neither frontend-next nor legacy frontend directory was found.")
+        return 1
 
+    port = int(os.getenv("LEGACY_FRONTEND_PORT", "8080"))
+    url = f"http://localhost:{port}/index.html"
+    print(f"Starting legacy static frontend on {url}")
+    print("Press Ctrl+C to stop the server")
 
-def open_browser():
-    """Open the browser after a short delay"""
-    time.sleep(2)  # Wait for server to start
-    url = f"http://localhost:{PORT}/index.html"
-    print(f"Opening browser at: {url}")
-    webbrowser.open(url)
-
-
-if __name__ == "__main__":
-    print(
-        """
-    ╔═══════════════════════════════════════╗
-    ║     Research Agent Frontend Server    ║
-    ╚═══════════════════════════════════════╝
-    """
-    )
-
-    # Check if frontend directory exists
-    if not os.path.exists(DIRECTORY):
-        print(f"Error: Frontend directory '{DIRECTORY}' not found!")
-        exit(1)
-
-    # Check if index.html exists
-    index_path = os.path.join(DIRECTORY, "index.html")
-    if not os.path.exists(index_path):
-        print(f"Error: index.html not found in '{DIRECTORY}'!")
-        exit(1)
-
-    print(f"\nStarting frontend server on port {PORT}...")
-    print("Press Ctrl+C to stop the server\n")
-
-    # Start browser opener in a separate thread
-    browser_thread = threading.Thread(target=open_browser)
+    browser_thread = threading.Thread(target=_open_browser_delayed, args=(url,))
     browser_thread.daemon = True
     browser_thread.start()
 
     try:
-        # Run the server
-        run_server()
+        with socketserver.TCPServer(("", port), _LegacyHandler) as httpd:
+            httpd.serve_forever()
     except KeyboardInterrupt:
-        print("\n\nServer stopped.")
-    except Exception as e:
-        print(f"Error: {e}")
+        return 0
+    return 0
+
+
+if __name__ == "__main__":
+    print("=======================================")
+    print("    Research Agent Frontend Server")
+    print("=======================================")
+
+    try:
+        if NEXT_DIR.exists():
+            raise SystemExit(_run_next_frontend())
+        raise SystemExit(_run_legacy_frontend())
+    except KeyboardInterrupt:
+        print("\nServer stopped.")

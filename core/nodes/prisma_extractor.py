@@ -13,6 +13,7 @@ validated Pydantic output.
 
 from __future__ import annotations
 
+import difflib
 import logging
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
@@ -20,6 +21,39 @@ from typing import Any, Dict, List, Optional, Tuple
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Grounding Verification
+# ---------------------------------------------------------------------------
+
+def _verify_grounding(entity_text: str, source_text: str, threshold: float = 0.6) -> bool:
+    """
+    Verify if an extracted entity text actually appears in the source text.
+    Returns True if a fuzzy match above the threshold is found.
+    """
+    if not entity_text or not source_text:
+        return False
+        
+    entity_text_lower = entity_text.lower()
+    source_lower = source_text.lower()
+    
+    # Fast paths
+    if entity_text_lower in source_lower:
+        return True
+    
+    # If entity is very short, exact match is required
+    if len(entity_text) < 10:
+        return False
+        
+    # Fuzzy match using SequenceMatcher for longer phrases (e.g. LLM variations/omissions)
+    matcher = difflib.SequenceMatcher(None, entity_text_lower, source_lower)
+    
+    # We don't need a full match, just a substantial overlapping block
+    match = matcher.find_longest_match(0, len(entity_text_lower), 0, len(source_lower))
+    match_ratio = match.size / len(entity_text_lower)
+    
+    return match_ratio >= threshold
 
 
 # ---------------------------------------------------------------------------
@@ -358,8 +392,11 @@ If a category has no relevant content in this chunk, return an empty list for th
 async def extract_prisma_structured(
     text: str,
     paper_id: str,
-    gliner_spans: List[Dict[str, str]],
+    gliner_spans: List[Dict[str, Any]],
     llm: Any,
+    max_prompt_chars: int = 8000,
+    strict_grounding: bool = False,
+    temperature: float = 0.2,
 ) -> Tuple[List[Dict[str, Any]], List[Tuple[str, str, str]], List[Dict[str, Any]]]:
     """
     Use LLM with Pydantic schema to extract structured PRISMA data.
@@ -371,11 +408,16 @@ async def extract_prisma_structured(
         relations: List of (source_text, relation_type, target_text) triples
         hyperedges: List of extracted hyperedge dictionaries
     """
-    # Format GLiNER spans as grounded context
-    if gliner_spans:
+    if not llm:
+        return [], [], []
+
+    # Format GLiNER spans as grounded context, ensuring they fall within our prompt text window
+    valid_spans = [s for s in gliner_spans if s.get('start', 0) < max_prompt_chars]
+    
+    if valid_spans:
         span_context = "\n".join(
             f"  - [{s['label']}] \"{s['text']}\" (confidence: {s['score']})"
-            for s in gliner_spans
+            for s in valid_spans
         )
         grounding_section = (
             f"\n\nPre-identified entity spans from NER:\n{span_context}\n\n"
@@ -388,7 +430,7 @@ async def extract_prisma_structured(
     user_prompt = (
         f"Extract PRISMA 2020 structured data from this academic text chunk."
         f"{grounding_section}\n\n"
-        f"--- TEXT ---\n{text[:3000]}\n--- END TEXT ---"
+        f"--- TEXT ---\n{text[:max_prompt_chars]}\n--- END TEXT ---"
     )
 
     try:
@@ -398,7 +440,7 @@ async def extract_prisma_structured(
                 user_prompt,
                 schema=PRISMAExtraction,
                 system_prompt=PRISMA_EXTRACTION_SYSTEM_PROMPT,
-                temperature=0.2,
+                temperature=temperature,
             )
         else:
             # Fallback: use generate() and parse manually
@@ -411,7 +453,7 @@ async def extract_prisma_structured(
                     + f"\n\nRespond ONLY with valid JSON matching this schema:\n"
                     f"{PRISMAExtraction.model_json_schema()}"
                 ),
-                temperature=0.2,
+                temperature=temperature,
                 max_tokens=2048,
             )
             cleaned = raw.strip()
@@ -589,11 +631,35 @@ async def extract_prisma_structured(
             "paper_ids": [paper_id]
         })
 
+    # Final pass: check grounding and build final list
+    # The source considered for grounding is the text LLM saw, up to max_prompt_chars
+    source_window = text[:max_prompt_chars]
+    valid_entities = []
+    
+    for ent in entities:
+        if ent["label"] == "paper":
+            valid_entities.append(ent)
+            continue
+            
+        is_grounded = _verify_grounding(ent["text"], source_window)
+        
+        # If strict grounding is enabled, drop ungrounded entities
+        if strict_grounding and not is_grounded:
+            logger.warning(f"Dropped ungrounded {ent['label']} entity: {ent['text'][:50]}...")
+            continue
+            
+        ent["prisma_properties"]["grounding_verified"] = is_grounded
+        valid_entities.append(ent)
+
+    # Note: Filter relations and hyperedges if entities were dropped?
+    # In strict grounding mode, we ideally filter orphaned relations.
+    # For now, GraphDB handles non-existent node references safely.
+
     logger.info(
-        f"LLM extracted {len(entities)} PRISMA entities, "
+        f"LLM extracted {len(valid_entities)} PRISMA entities, "
         f"{len(relations)} relations, and {len(hyperedges)} hyperedges (paper_id={paper_id})"
     )
-    return entities, relations, hyperedges
+    return valid_entities, relations, hyperedges
 
 
 # ---------------------------------------------------------------------------
@@ -605,6 +671,8 @@ async def extract_prisma_entities(
     text: str,
     paper_id: str,
     llm: Any = None,
+    dual_pass: bool = False,
+    rigor_level: str = "exploratory",
 ) -> Tuple[List[Dict[str, Any]], List[Tuple[str, str, str]], List[Dict[str, Any]]]:
     """
     Run the full 2-tier PRISMA extraction pipeline.
@@ -620,9 +688,37 @@ async def extract_prisma_entities(
 
     # Tier 2: LLM structured extraction (uses GLiNER spans as context)
     if llm is not None:
+        strict_mode = rigor_level in ("prisma", "cochrane")
+        
         llm_entities, llm_relations, llm_hyperedges = await extract_prisma_structured(
-            text, paper_id, gliner_spans, llm
+            text, paper_id, gliner_spans, llm,
+            strict_grounding=strict_mode, temperature=0.2
         )
+        
+        if dual_pass:
+            # Second pass with higher temperature for variance, then reconcile
+            logger.info(f"Running dual-pass LLM extraction for {paper_id}")
+            pass2_ents, pass2_rels, pass2_hyps = await extract_prisma_structured(
+                text, paper_id, gliner_spans, llm,
+                strict_grounding=strict_mode, temperature=0.5
+            )
+            
+            # Reconciliation strategy: combine them, but flag unique elements for human review
+            # For simplicity, we merge both sets and deduplicate by text context.
+            # In a real rigorous Cochrane review, independent models/humans would extract,
+            # and a third arbitrator would resolve conflicts.
+            seen_texts = {e["text"].lower() for e in llm_entities if "text" in e}
+            
+            for p2_ent in pass2_ents:
+                if p2_ent.get("text", "").lower() not in seen_texts:
+                    # Mark as originating from second pass only
+                    p2_ent["prisma_properties"]["dual_extraction_conflict"] = True
+                    llm_entities.append(p2_ent)
+                    seen_texts.add(p2_ent.get("text", "").lower())
+                    
+            # Combine relations and hyperedges (simply extend, graph engine usually deduplicates matching triplets)
+            llm_relations.extend(pass2_rels)
+            llm_hyperedges.extend(pass2_hyps)
 
         if llm_entities:
             # Merge: LLM entities are primary (richer), GLiNER fills gaps
@@ -631,8 +727,14 @@ async def extract_prisma_entities(
 
             for g_ent in gliner_entities:
                 if g_ent["text"].lower() not in seen_texts:
+                    g_ent.setdefault("prisma_properties", {})["dual_extraction"] = dual_pass
                     combined_entities.append(g_ent)
                     seen_texts.add(g_ent["text"].lower())
+                    
+            # Mark all LLM entities with dual_extraction status
+            for e in combined_entities:
+                if "prisma_properties" in e:
+                    e["prisma_properties"]["dual_extraction"] = dual_pass
 
             return combined_entities, llm_relations, llm_hyperedges
 

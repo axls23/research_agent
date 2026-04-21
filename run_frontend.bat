@@ -14,7 +14,7 @@ if errorlevel 1 (
 )
 
 REM Run the frontend server
-echo Starting frontend server on http://localhost:8080
+echo Starting frontend server on http://localhost:3000 (frontend-next) or fallback http://localhost:8080
 echo Press Ctrl+C to stop the server
 echo.
 

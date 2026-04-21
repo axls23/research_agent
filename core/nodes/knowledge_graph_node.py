@@ -42,6 +42,7 @@ def _persist_to_neo4j(
     relations: List[Tuple[str, str, str]],
     hyperedges: List[Dict[str, Any]] = None,
     paper_id: str = "",
+    chunks: List[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Persist PRISMA entities and relations to Neo4j.
@@ -71,6 +72,25 @@ def _persist_to_neo4j(
         rels_created = 0
 
         with driver.session() as session:
+            # Create vector indexes if they don't exist
+            # Note: Requires Neo4j 5.x+
+            session.run(
+                "CREATE VECTOR INDEX prisma_embeddings IF NOT EXISTS "
+                "FOR (n:PRISMAEntity) ON (n.embedding) "
+                "OPTIONS {indexConfig: { "
+                " `vector.dimensions`: 768, "
+                " `vector.similarity_function`: 'cosine' "
+                "}}"
+            )
+            session.run(
+                "CREATE VECTOR INDEX chunk_embeddings IF NOT EXISTS "
+                "FOR (c:Chunk) ON (c.embedding) "
+                "OPTIONS {indexConfig: { "
+                " `vector.dimensions`: 768, "
+                " `vector.similarity_function`: 'cosine' "
+                "}}"
+            )
+
             # Ensure Paper node exists
             if paper_id:
                 session.run(
@@ -80,11 +100,26 @@ def _persist_to_neo4j(
                 )
                 nodes_created += 1
 
+            # Persist Chunk nodes
+            if chunks:
+                for c in chunks:
+                    c_text = c.get("text")
+                    c_emb = c.get("embedding")
+                    if c_text and c_emb:
+                        session.run(
+                            "MERGE (ch:Chunk {text: $text}) "
+                            "ON CREATE SET ch.paper_id = $pid, ch.embedding = $emb "
+                            "ON MATCH SET ch.embedding = $emb",
+                            text=c_text, pid=c.get("paper_id", paper_id), emb=c_emb
+                        )
+                        nodes_created += 1
+
             # Create PRISMA entity nodes
             for ent in entities:
                 label = ent["label"].capitalize()
                 text = ent["text"]
                 prisma_props = ent.get("prisma_properties", {})
+                emb = ent.get("embedding", [])
 
                 # Use parameterized label via APOC or fallback to safe labels
                 if label in {
@@ -95,21 +130,37 @@ def _persist_to_neo4j(
                     "Limitation",
                     "Implication",
                 }:
-                    # MERGE entity node with PRISMA properties
+                    # MERGE entity node with PRISMA properties and Vector Embedding
                     props_json = json.dumps(prisma_props) if prisma_props else "{}"
                     session.run(
-                        f"MERGE (e:{label} {{text: $text}}) "
+                        f"MERGE (e:{label}:PRISMAEntity {{text: $text}}) "
                         f"ON CREATE SET e.entity_id = $eid, "
                         f"  e.paper_ids = $pids, "
-                        f"  e.prisma_properties = $props "
+                        f"  e.prisma_properties = $props, "
+                        f"  e.prisma_label = $prisma_label, "
+                        f"  e.embedding = $emb "
                         f"ON MATCH SET e.paper_ids = "
-                        f"  [x IN e.paper_ids + $pids WHERE x IS NOT NULL]",
+                        f"  [x IN e.paper_ids + $pids WHERE x IS NOT NULL], "
+                        f"  e.embedding = $emb",
                         text=text,
                         eid=ent["entity_id"],
                         pids=ent["paper_ids"],
                         props=props_json,
+                        emb=emb,
+                        prisma_label=ent.get("label", "objective")
                     )
                     nodes_created += 1
+
+                    # Ground the entity back to its exact source chunk (Provenance routing)
+                    source_chunk = ent.get("source_chunk_text")
+                    if source_chunk:
+                        session.run(
+                            f"MATCH (e:{label}:PRISMAEntity {{text: $ent_text}}) "
+                            f"MATCH (ch:Chunk {{text: $chunk_text}}) "
+                            f"MERGE (e)-[r:EXTRACTED_FROM]->(ch)",
+                            ent_text=text, chunk_text=source_chunk
+                        )
+                        rels_created += 1
 
             # Create PRISMA relationships
             for subj_text, rel_type, obj_text in relations:
@@ -172,119 +223,6 @@ def _persist_to_neo4j(
     except Exception as e:
         logger.error(f"Neo4j persistence failed: {e}")
         return {"neo4j_status": "error", "error": str(e)}
-
-
-# ---------------------------------------------------------------------------
-# Qdrant + Transformer vector embedding — PRISMA-tagged payloads
-# ---------------------------------------------------------------------------
-
-
-def _embed_and_store_qdrant(
-    entities: List[Dict[str, Any]],
-    vector_size: int = 384,
-) -> Dict[str, Any]:
-    """
-    Generate embeddings for PRISMA entities and upsert to Qdrant.
-
-    Payloads include PRISMA label, prisma_properties, and paper_ids
-    to enable filtered semantic search by PRISMA domain.
-
-    Uses BAAI/bge-small-en-v1.5 (local CPU, no API calls).
-    """
-    if not entities:
-        return {"qdrant_status": "skipped", "reason": "no entities"}
-
-    try:
-        from qdrant_client import QdrantClient
-        from qdrant_client.http import models
-
-        # Prepare texts for embedding
-        texts = [ent["text"] for ent in entities if ent.get("text")]
-        if not texts:
-            logger.warning("No texts to embed, skipping Qdrant")
-            return {"qdrant_status": "skipped", "reason": "no entity texts"}
-
-        from sentence_transformers import SentenceTransformer
-
-        logger.info("Loading BAAI/bge-small-en-v1.5 embedding model...")
-        model = SentenceTransformer("BAAI/bge-small-en-v1.5")
-
-        logger.info(f"Computing embeddings for {len(texts)} PRISMA entities...")
-        embeddings = model.encode(texts, show_progress_bar=False)
-
-        # Build points with PRISMA-enriched payloads
-        points = []
-        valid_entities = [ent for ent in entities if ent.get("text")]
-        for i, (ent, embedding) in enumerate(zip(valid_entities, embeddings)):
-            payload = {
-                "text": ent["text"],
-                "label": ent.get("label", "objective"),
-                "prisma_label": ent.get("label", "objective"),
-                "paper_ids": ent.get("paper_ids", []),
-                "entity_id": ent.get("entity_id", ""),
-            }
-            # Add PRISMA properties to payload for filtered queries
-            prisma_props = ent.get("prisma_properties", {})
-            if prisma_props:
-                payload["prisma_properties"] = prisma_props
-
-            points.append(
-                models.PointStruct(
-                    id=i,
-                    vector=embedding.tolist(),
-                    payload=payload,
-                )
-            )
-
-        # Connect to Qdrant
-        qdrant_url = os.environ.get("QDRANT_URL")
-        qdrant_api_key = os.environ.get("QDRANT_API_KEY")
-        collection_name = "research_entities"
-
-        if qdrant_url:
-            client = QdrantClient(url=qdrant_url, api_key=qdrant_api_key)
-        else:
-            client = QdrantClient(location=":memory:")
-            logger.info(
-                "Using in-memory Qdrant (set QDRANT_URL for persistent storage)"
-            )
-
-        # Recreate collection
-        client.recreate_collection(
-            collection_name=collection_name,
-            vectors_config=models.VectorParams(
-                size=vector_size,
-                distance=models.Distance.COSINE,
-            ),
-        )
-
-        # Upsert in batches
-        batch_size = 100
-        for i in range(0, len(points), batch_size):
-            client.upsert(
-                collection_name=collection_name,
-                points=points[i : i + batch_size],
-            )
-
-        logger.info(
-            f"Qdrant: upserted {len(points)} PRISMA entity vectors "
-            f"to '{collection_name}'"
-        )
-
-        return {
-            "qdrant_status": "success",
-            "vectors_stored": len(points),
-            "collection": collection_name,
-            "model": "BAAI/bge-small-en-v1.5",
-            "prisma_labels": {
-                label: sum(1 for e in valid_entities if e.get("label") == label)
-                for label in PRISMA_ENTITY_TYPES
-            },
-        }
-
-    except Exception as e:
-        logger.error(f"Qdrant/Transformer embedding failed: {e}")
-        return {"qdrant_status": "error", "error": str(e)}
 
 
 # ---------------------------------------------------------------------------
@@ -356,7 +294,7 @@ async def knowledge_graph_node(
       1. Tier 1 (GLiNER) — zero-shot NER → grounded entity spans
       2. Tier 2 (LLM + Pydantic) — structured PRISMA extraction via Groq
       3. Neo4j — persist PRISMA ontology as reasoning graph
-      4. Qdrant — embed entities with PRISMA payloads for semantic retrieval
+      4. Neo4j Vector — Embed entities using Specter2 for semantic search
       5. JSON export — for visualization
     """
     config = config or {}
@@ -381,12 +319,21 @@ async def knowledge_graph_node(
 
     # ---- Phase 1: Extract PRISMA entities & relations ----
     sample_size = min(len(chunks), 50)
+    rigor_level = state.get("rigor_level", "exploratory")
+    is_dual_pass = (rigor_level == "cochrane")
+    
     for chunk_data in chunks[:sample_size]:
         text = chunk_data.get("text", "")
         paper_id = chunk_data.get("paper_id", "")
 
-        # Run 2-tier extraction pipeline
-        entities, relations, hyperedges = await extract_prisma_entities(text, paper_id, llm=llm)
+        entities, relations, hyperedges = await extract_prisma_entities(
+            text, paper_id, llm=llm, dual_pass=is_dual_pass, rigor_level=rigor_level
+        )
+        
+        # Ground extracted entities to the specific chunk for UI tracing
+        for e in entities:
+            e["source_chunk_text"] = text
+
         all_entities.extend(entities)
         all_relations.extend(relations)
         all_hyperedges.extend(hyperedges)
@@ -395,6 +342,35 @@ async def knowledge_graph_node(
         f"Extracted {len(all_entities)} PRISMA entities, "
         f"{len(all_relations)} relations, and {len(all_hyperedges)} hyperedges from {sample_size} chunks"
     )
+
+    # ---- Phase 1.5: Embed using Specter2 (Rigor alignment) ----
+    embed_result = {"status": "skipped"}
+    try:
+        from sentence_transformers import SentenceTransformer
+        logger.info("Loading allenai/specter2_base embedding model for rigorous vector space...")
+        # Local model loading, this requires memory but avoids API calls
+        embed_model = SentenceTransformer("allenai/specter2_base")
+
+        # 1. Embed Chunks
+        valid_chunks = [c for c in chunks[:sample_size] if c.get("text")]
+        if valid_chunks:
+            chunk_texts = [c["text"] for c in valid_chunks]
+            chunk_embeddings = embed_model.encode(chunk_texts, show_progress_bar=False)
+            for c, emb in zip(valid_chunks, chunk_embeddings):
+                c["embedding"] = emb.tolist()
+
+        # 2. Embed Entities
+        valid_entities = [e for e in all_entities if e.get("text")]
+        if valid_entities:
+            entity_texts = [e["text"] for e in valid_entities]
+            entity_embeddings = embed_model.encode(entity_texts, show_progress_bar=False)
+            for e, emb in zip(valid_entities, entity_embeddings):
+                e["embedding"] = emb.tolist()
+
+        embed_result = {"status": "success", "model": "allenai/specter2_base"}
+    except Exception as e:
+        logger.error(f"Specter2 embedding sequence failed: {e}")
+        embed_result = {"status": "error", "error": str(e)}
 
     # ---- Phase 2: Persist to Neo4j (reasoning graph) ----
     # Collect unique paper_ids for paper node creation
@@ -407,14 +383,12 @@ async def knowledge_graph_node(
         pid_entities = [e for e in all_entities if pid in e.get("paper_ids", [])]
         pid_relations = [r for r in all_relations if pid in str(r[0])]
         pid_hyperedges = [h for h in all_hyperedges if pid in h.get("paper_ids", [])]
-        result = _persist_to_neo4j(pid_entities, pid_relations, hyperedges=pid_hyperedges, paper_id=pid)
+        pid_chunks = [c for c in chunks[:sample_size] if c.get("paper_id") == pid]
+        result = _persist_to_neo4j(pid_entities, pid_relations, hyperedges=pid_hyperedges, paper_id=pid, chunks=pid_chunks)
         if result.get("neo4j_status") == "success":
             neo4j_result = result
 
-    # ---- Phase 3: Embed in Qdrant (semantic retrieval) ----
-    qdrant_result = _embed_and_store_qdrant(all_entities)
-
-    # ---- Phase 4: Export graph JSON ----
+    # ---- Phase 3: Export graph JSON ----
     graph_path = _export_graph_json(all_entities, all_relations)
 
     # ---- Build summary ----
@@ -428,7 +402,7 @@ async def knowledge_graph_node(
             for label in PRISMA_ENTITY_TYPES
         },
         "neo4j": neo4j_result,
-        "qdrant": qdrant_result,
+        "embedding": embed_result,
         "graph_export_path": graph_path,
     }
 
@@ -441,7 +415,7 @@ async def knowledge_graph_node(
             f"PRISMA extraction: {len(all_entities)} entities, "
             f"{len(all_relations)} relations, {len(all_hyperedges)} hyperedges. "
             f"Neo4j: {neo4j_result.get('neo4j_status')}. "
-            f"Qdrant: {qdrant_result.get('qdrant_status')}."
+            f"Embeddings: {embed_result.get('status')}."
         ),
     )
 

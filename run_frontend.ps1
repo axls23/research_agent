@@ -18,7 +18,7 @@ try {
 
 # Run the frontend server
 Write-Host ""
-Write-Host "Starting frontend server on http://localhost:8080" -ForegroundColor Green
+Write-Host "Starting frontend server on http://localhost:3000 (frontend-next) or fallback http://localhost:8080" -ForegroundColor Green
 Write-Host "Press Ctrl+C to stop the server" -ForegroundColor Yellow
 Write-Host ""
 

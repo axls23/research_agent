@@ -4,7 +4,7 @@ tests/integration/test_deep_agents_e2e.py
 End-to-end integration tests for the ReAct agent loop.
 
 Tier 1: Agent-level tests (no LLM required)
-Tier 2: Tool-level tests (Qdrant/Neo4j connectivity)
+Tier 2: Tool-level tests (Neo4j Vector/Neo4j Graph connectivity)
 Tier 3: Orchestrator test (requires GROQ_API_KEY)
 """
 
@@ -63,7 +63,7 @@ try:
     r = _run(kg.process({"action": "initialize_graph", "project_name": "Test Project"}))
     report("KG: initialize_graph", r["status"] == "completed" and "graph_id" in r)
 
-    # check_coverage (will return 0s because Qdrant won't have data for this topic)
+    # check_coverage (will return 0s because Neo4j won't have data for this topic)
     r = _run(kg.process({"action": "check_coverage", "topic": "test_topic_xyz"}))
     report(
         "KG: check_coverage",
@@ -194,33 +194,33 @@ except Exception as e:
 
 print(f"\n{BOLD}{CYAN}=== TIER 2: Tool Wrappers (live services) ==={RESET}\n")
 
-# ── Qdrant Search ────────────────────────────────────────────────────────────
+# ── Neo4j Vector Search ───────────────────────────────────────────────────────
 try:
-    from core.agent_tools import qdrant_search
+    from core.agent_tools import neo4j_vector_search
 
-    qdrant_url = os.environ.get("QDRANT_URL")
-    if not qdrant_url:
-        report("Qdrant: search", False, skip=True, detail="QDRANT_URL not set")
+    neo4j_pw = os.environ.get("NEO4J_PASSWORD")
+    if not neo4j_pw:
+        report("Neo4j Vector: search", False, skip=True, detail="NEO4J_PASSWORD not set")
     else:
-        results = qdrant_search("machine learning healthcare", limit=5)
+        results = neo4j_vector_search("machine learning healthcare", limit=5)
         report(
-            "Qdrant: search",
+            "Neo4j Vector: search",
             isinstance(results, list),
             f"returned {len(results)} results",
         )
 
         # With PRISMA label filter
-        results_filtered = qdrant_search(
+        results_filtered = neo4j_vector_search(
             "methodology", prisma_label="methodology", limit=3
         )
         report(
-            "Qdrant: search (PRISMA filter)",
+            "Neo4j Vector: search (PRISMA filter)",
             isinstance(results_filtered, list),
             f"returned {len(results_filtered)} methodology results",
         )
 
 except Exception as e:
-    report("Qdrant tools", False, f"{e}\n{traceback.format_exc()}")
+    report("Neo4j Vector tools", False, f"{e}\n{traceback.format_exc()}")
 
 # ── Neo4j Query ──────────────────────────────────────────────────────────────
 try:
@@ -272,7 +272,7 @@ try:
 
     # Verify system prompt contains key elements
     has_subagents = "literature-search" in ORCHESTRATOR_SYSTEM_PROMPT
-    has_tools = "qdrant_search" in ORCHESTRATOR_SYSTEM_PROMPT
+    has_tools = "neo4j_vector_search" in ORCHESTRATOR_SYSTEM_PROMPT
     has_prisma = "PRISMA" in ORCHESTRATOR_SYSTEM_PROMPT
     report(
         "Orchestrator: system prompt",

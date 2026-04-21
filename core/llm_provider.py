@@ -14,10 +14,11 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import yaml
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Type, Union
-from pydantic import BaseModel, Field
+from typing import Any, Callable, Dict, List, Optional, Type, Union
+from pydantic import BaseModel, Field, ValidationError
 
 from langchain_core.messages import BaseMessage, AIMessage, HumanMessage, SystemMessage
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -26,6 +27,103 @@ from langchain_core.outputs import ChatResult, ChatGeneration
 from core.reasoning import NativeReasoningLoop
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Shared JSON cleaning & retry utilities
+# ---------------------------------------------------------------------------
+
+
+def _clean_llm_json(raw: str) -> str:
+    """Strip markdown fences, preamble prose, and trailing junk from LLM JSON output."""
+    cleaned = raw.strip()
+
+    # Remove leading prose before the first { or [
+    first_brace = -1
+    for i, ch in enumerate(cleaned):
+        if ch in ('{', '['):
+            first_brace = i
+            break
+    if first_brace > 0:
+        cleaned = cleaned[first_brace:]
+
+    # Remove trailing prose after the last } or ]
+    last_brace = -1
+    for i in range(len(cleaned) - 1, -1, -1):
+        if cleaned[i] in ('}', ']'):
+            last_brace = i
+            break
+    if last_brace >= 0 and last_brace < len(cleaned) - 1:
+        cleaned = cleaned[: last_brace + 1]
+
+    # Handle markdown fences (```json ... ```, ``` ... ```, etc.)
+    fence_pattern = re.compile(r'^```(?:json|JSON)?\s*\n?', re.MULTILINE)
+    cleaned = fence_pattern.sub('', cleaned)
+    cleaned = cleaned.replace('```', '').strip()
+
+    return cleaned
+
+
+async def _parse_structured_with_retry(
+    generate_fn: Callable,
+    prompt: str,
+    schema: Type[BaseModel],
+    system_prompt: Optional[str] = None,
+    temperature: float = 0.3,
+    max_retries: int = 2,
+    **kwargs: Any,
+) -> BaseModel:
+    """
+    Parse LLM output into a Pydantic schema with retry-on-failure.
+
+    On ValidationError, feeds the error back to the LLM for self-correction
+    (up to max_retries). This prevents silent data loss from transient
+    formatting errors.
+    """
+    schema_json = json.dumps(schema.model_json_schema(), indent=2)
+    base_system = (
+        (system_prompt or "")
+        + f"\n\nRespond ONLY with valid JSON matching this schema:\n{schema_json}"
+    )
+
+    last_error = None
+    for attempt in range(1 + max_retries):
+        effective_prompt = prompt
+        effective_system = base_system
+
+        if attempt > 0 and last_error:
+            # Feed the error back for self-correction
+            effective_prompt = (
+                f"Your previous JSON response was invalid.\n"
+                f"Error: {last_error}\n\n"
+                f"Please fix the JSON and respond ONLY with valid JSON.\n\n"
+                f"Original request:\n{prompt}"
+            )
+
+        raw = await generate_fn(
+            effective_prompt,
+            system_prompt=effective_system,
+            temperature=temperature,
+            **kwargs,
+        )
+
+        cleaned = _clean_llm_json(raw)
+        try:
+            return schema.model_validate_json(cleaned)
+        except (ValidationError, json.JSONDecodeError, ValueError) as e:
+            last_error = str(e)[:500]  # Cap error length for prompt budget
+            logger.warning(
+                "Structured parse attempt %d/%d failed: %s",
+                attempt + 1, 1 + max_retries, last_error[:120],
+            )
+
+    # Final fallback: raise so callers can handle
+    raise ValidationError.from_exception_data(
+        title=schema.__name__,
+        line_errors=[],
+    ) if hasattr(ValidationError, 'from_exception_data') else ValueError(
+        f"Failed to parse {schema.__name__} after {1 + max_retries} attempts: {last_error}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -141,23 +239,10 @@ class GroqProvider(LLMProvider):
         temperature: float = 0.3,
         **kwargs: Any,
     ) -> BaseModel:
-        raw = await self.generate(
-            prompt,
-            system_prompt=(
-                (system_prompt or "")
-                + f"\n\nRespond ONLY with valid JSON matching this schema:\n"
-                f"{json.dumps(schema.model_json_schema(), indent=2)}"
-            ),
-            temperature=temperature,
-            **kwargs,
+        return await _parse_structured_with_retry(
+            self.generate, prompt, schema,
+            system_prompt=system_prompt, temperature=temperature, **kwargs,
         )
-        # Strip markdown fences if the model wraps output
-        cleaned = raw.strip()
-        if cleaned.startswith("```"):
-            cleaned = cleaned.split("\n", 1)[1]
-            if cleaned.endswith("```"):
-                cleaned = cleaned[:-3]
-        return schema.model_validate_json(cleaned)
 
 
 # ---------------------------------------------------------------------------
@@ -266,6 +351,80 @@ class MistralProvider(LLMProvider):
 
 
 # ---------------------------------------------------------------------------
+# Ollama Provider (local)
+# ---------------------------------------------------------------------------
+
+
+class OllamaProvider(LLMProvider):
+    """Local LLM via native Ollama chat API."""
+
+    def __init__(
+        self,
+        model: str = "qwen2.5:3b",
+        base_url: Optional[str] = None,
+        **kwargs: Any,
+    ):
+        self.model = model
+        raw_base = base_url or os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+        # ChatOllama expects the Ollama host, not OpenAI-style /v1 path.
+        self.base_url = raw_base[:-3] if raw_base.endswith("/v1") else raw_base
+        self._kwargs = kwargs
+
+    def _get_chat_model(
+        self,
+        *,
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+    ):  # noqa: ANN202
+        from langchain_ollama import ChatOllama
+
+        model_kwargs = dict(self._kwargs)
+        if temperature is not None:
+            model_kwargs["temperature"] = temperature
+        # ChatOllama uses num_predict as the output token budget.
+        if max_tokens is not None:
+            model_kwargs["num_predict"] = max_tokens
+
+        return ChatOllama(
+            model=self.model,
+            base_url=self.base_url,
+            **model_kwargs,
+        )
+
+    async def generate(
+        self,
+        prompt: str,
+        *,
+        system_prompt: Optional[str] = None,
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+        **kwargs: Any,
+    ) -> str:
+        chat = self._get_chat_model(temperature=temperature, max_tokens=max_tokens)
+        messages = []
+        if system_prompt:
+            messages.append(SystemMessage(content=system_prompt))
+        messages.append(HumanMessage(content=prompt))
+
+        result = await chat.ainvoke(messages, **kwargs)
+        return result.content
+
+    async def generate_structured(
+        self,
+        prompt: str,
+        schema: Type[BaseModel],
+        *,
+        system_prompt: Optional[str] = None,
+        temperature: float = 0.3,
+        **kwargs: Any,
+    ) -> BaseModel:
+        return await _parse_structured_with_retry(
+            self.generate, prompt, schema,
+            system_prompt=system_prompt, temperature=temperature, **kwargs,
+        )
+
+
+# ---------------------------------------------------------------------------
 # AirLLM Provider (local fallback for large models)
 # ---------------------------------------------------------------------------
 
@@ -358,23 +517,10 @@ class AirLLMProvider(LLMProvider):
         temperature: float = 0.3,
         **kwargs: Any,
     ) -> BaseModel:
-        raw = await self.generate(
-            prompt,
-            system_prompt=(
-                (system_prompt or "")
-                + f"\n\nRespond ONLY with valid JSON matching this schema:\n"
-                f"{json.dumps(schema.model_json_schema(), indent=2)}"
-            ),
-            temperature=temperature,
-            **kwargs,
+        return await _parse_structured_with_retry(
+            self.generate, prompt, schema,
+            system_prompt=system_prompt, temperature=temperature, **kwargs,
         )
-        # Strip markdown fences
-        cleaned = raw.strip()
-        if cleaned.startswith("```"):
-            cleaned = cleaned.split("\n", 1)[1]
-            if cleaned.endswith("```"):
-                cleaned = cleaned[:-3]
-        return schema.model_validate_json(cleaned)
 
 # ---------------------------------------------------------------------------
 # FastRLM Provider (local models via fast-rlm)
@@ -496,21 +642,10 @@ class FastRLMProvider(LLMProvider):
         return result.content
 
     async def generate_structured(self, prompt: str, schema: Type[BaseModel], system_prompt: Optional[str] = None, **kwargs: Any) -> BaseModel:
-        raw = await self.generate(
-            prompt,
-            system_prompt=(
-                (system_prompt or "")
-                + f"\n\nRespond ONLY with valid JSON matching this schema:\n"
-                f"{json.dumps(schema.model_json_schema(), indent=2)}"
-            ),
-            **kwargs
+        return await _parse_structured_with_retry(
+            self.generate, prompt, schema,
+            system_prompt=system_prompt, **kwargs,
         )
-        cleaned = raw.strip()
-        if cleaned.startswith("```"):
-            cleaned = cleaned.split("\n", 1)[1]
-            if cleaned.endswith("```"):
-                cleaned = cleaned[:-3]
-        return schema.model_validate_json(cleaned)
 
 
 # ---------------------------------------------------------------------------
@@ -540,6 +675,8 @@ def create_llm_provider(
         return GroqProvider(model=model or "llama-3.1-8b-instant", **kwargs)
     elif provider == "mistral":
         return MistralProvider(model=model or "mistral-small-latest", **kwargs)
+    elif provider == "ollama":
+        return OllamaProvider(model=model or os.getenv("OLLAMA_MODEL", "qwen2.5:3b"), **kwargs)
     elif provider == "airllm":
         return AirLLMProvider(model=model or "meta-llama/Meta-Llama-3.1-70B-Instruct", **kwargs)
     elif provider == "fast_rlm":
@@ -562,7 +699,7 @@ def create_llm_provider(
         return OpenAIProvider(model=model or "Qwen/Qwen2.5-7B-Instruct", **kwargs)
     else:
         raise ValueError(
-            f"Unknown LLM provider: {provider!r}. " f"Supported: groq, mistral, airllm, fast_rlm, openai"
+            f"Unknown LLM provider: {provider!r}. " f"Supported: groq, mistral, ollama, airllm, fast_rlm, openai"
         )
 
 
@@ -572,14 +709,14 @@ def create_llm_from_config(config_path: str = "config/config.yaml") -> LLMProvid
 
     path = Path(config_path)
     if not path.exists():
-        logger.warning(f"Config not found at {config_path}, using Groq defaults")
-        return GroqProvider()
+        logger.warning(f"Config not found at {config_path}, using Ollama defaults")
+        return OllamaProvider(model=os.getenv("OLLAMA_MODEL", "qwen2.5:3b"))
 
     with open(path) as f:
         cfg = yaml.safe_load(f)
 
     llm_cfg = cfg.get("llm", {})
-    provider = llm_cfg.get("provider", "groq")
+    provider = llm_cfg.get("provider", "ollama")
     model = llm_cfg.get("model") or llm_cfg.get("groq_default_model")
 
     return create_llm_provider(
@@ -619,8 +756,8 @@ def create_tiered_providers(
 
     path = Path(config_path)
     if not path.exists():
-        logger.warning(f"Config not found at {config_path}, using single Groq default")
-        default = GroqProvider()
+        logger.warning(f"Config not found at {config_path}, using single Ollama default")
+        default = OllamaProvider(model=os.getenv("OLLAMA_MODEL", "qwen2.5:3b"))
         return {"fast": default, "deep": default, "agent_tiers": {}}
 
     with open(path) as f:
@@ -647,7 +784,7 @@ def create_tiered_providers(
 
     # Ensure at least fast + deep exist (fallback)
     if "fast" not in providers:
-        providers["fast"] = GroqProvider(model="llama-3.1-8b-instant")
+        providers["fast"] = OllamaProvider(model=os.getenv("OLLAMA_MODEL_FAST", os.getenv("OLLAMA_MODEL", "qwen2.5:3b")))
     if "deep" not in providers:
         providers["deep"] = providers["fast"]
 

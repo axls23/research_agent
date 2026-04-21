@@ -4,7 +4,6 @@ Validates:
   - GLiNER entity extraction with PRISMA labels
   - Pydantic PRISMA schema validation
   - Neo4j Cypher generation for PRISMA ontology
-  - Qdrant payload enrichment with PRISMA metadata
   - Full knowledge_graph_node pipeline (mocked dependencies)
 """
 
@@ -424,10 +423,9 @@ class TestKnowledgeGraphNode:
     """Test the full LangGraph node with mocked dependencies."""
 
     @pytest.mark.asyncio
-    @patch("core.nodes.knowledge_graph_node._embed_and_store_qdrant")
     @patch("core.nodes.knowledge_graph_node._persist_to_neo4j")
     @patch("core.nodes.prisma_extractor._get_gliner_model")
-    async def test_node_processes_chunks(self, mock_gliner, mock_neo4j, mock_qdrant):
+    async def test_node_processes_chunks(self, mock_gliner, mock_neo4j):
         from core.nodes.knowledge_graph_node import knowledge_graph_node
 
         # Mock GLiNER
@@ -443,7 +441,6 @@ class TestKnowledgeGraphNode:
             "nodes_created": 1,
             "relationships_created": 0,
         }
-        mock_qdrant.return_value = {"qdrant_status": "success", "vectors_stored": 1}
 
         state = {
             "chunks": [

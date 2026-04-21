@@ -11,7 +11,9 @@ import sys
 import asyncio
 import logging
 import argparse
+import json
 from pathlib import Path
+from urllib import error, request
 
 # Add project to Python path
 project_root = Path(__file__).parent
@@ -30,24 +32,70 @@ logger = logging.getLogger("run_research_agent")
 from core.graph import run_research_pipeline
 
 
-def check_requirements():
+def _normalize_ollama_model(model: str) -> str:
+    """Convert raw model input into an Ollama-qualified model reference."""
+    value = (model or "").strip()
+    default_model = os.getenv("OLLAMA_MODEL", "qwen2.5:3b")
+    if default_model.lower().startswith("ollama:"):
+        default_model = default_model.split(":", 1)[1]
+
+    if not value:
+        return f"ollama:{default_model}"
+    if value.lower().startswith("ollama:"):
+        return value
+    if ":" in value:
+        prefix = value.split(":", 1)[0].lower()
+        known_non_ollama = {"groq", "fast_rlm", "fast-rlm", "openai", "anthropic", "airllm"}
+        if prefix in known_non_ollama:
+            logger.warning(
+                "Non-ollama model '%s' requested; forcing default Ollama model 'ollama:%s'.",
+                value,
+                default_model,
+            )
+            return f"ollama:{default_model}"
+    return f"ollama:{value}"
+
+
+def check_requirements(selected_model: str):
     """Check if all requirements are met"""
-    # Just check if at least one LLM key is set, though Groq is primary
-    if (
-        not os.getenv("GROQ_API_KEY")
-        and not os.getenv("MISTRAL_API_KEY")
-        and not os.getenv("OPENAI_API_KEY")
-    ):
-        logger.warning(
-            "No API keys found (GROQ_API_KEY, MISTRAL_API_KEY, OPENAI_API_KEY). Operations requiring an LLM may fail."
-        )
-    return True
+    base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+    if base_url.endswith("/v1"):
+        base_url = base_url[:-3]
+
+    try:
+        req = request.Request(f"{base_url}/api/tags", method="GET")
+        with request.urlopen(req, timeout=3) as resp:
+            payload = json.loads(resp.read().decode("utf-8", errors="replace"))
+        model_names = [m.get("name", "") for m in payload.get("models", []) if isinstance(m, dict)]
+        requested_model_name = selected_model.split(":", 1)[1] if ":" in selected_model else selected_model
+        if requested_model_name and requested_model_name not in model_names:
+            logger.warning(
+                "Requested model '%s' not found in Ollama tags at %s. Available: %s",
+                requested_model_name,
+                base_url,
+                ", ".join(model_names[:10]) or "<none>",
+            )
+        logger.info("Ollama endpoint reachable at %s", base_url)
+        return True
+    except error.URLError as e:
+        logger.error("Cannot reach Ollama at %s: %s", base_url, e)
+        return False
+    except Exception as e:
+        logger.error("Ollama readiness check failed: %s", e)
+        return False
 
 
 async def main_async(args):
     """Async execution of the pipeline"""
-    logger.info(f"Using Mode: {args.mode}")
+    requested_mode = (args.mode or "agentic").lower()
+    if requested_mode != "agentic":
+        logger.warning("Mode '%s' requested; routing to agentic mode.", requested_mode)
+
+    resolved_model = _normalize_ollama_model(args.model or os.getenv("OLLAMA_MODEL", "qwen2.5:3b"))
+
+    logger.info("Using Mode: agentic")
     logger.info(f"Using Rigor Level: {args.rigor}")
+    logger.info("Using Model: %s", resolved_model)
 
     # In a real use case, these would be passed via CLI args as well,
     # but for a simple demo test, we can use placeholder topics.
@@ -61,16 +109,14 @@ async def main_async(args):
     logger.info(f"Running research pipeline on: '{topic}'")
 
     try:
-        # Map CLI modes to the pipeline's internal mode enum
-        internal_mode = "agentic" if args.mode == "agentic" else "deterministic"
-        
         result_state = await run_research_pipeline(
             project_name=project_name,
             research_topic=topic,
             research_goals=goals,
             rigor_level=args.rigor,
             interactive=False,  # Set to False so it doesn't wait indefinitely in tests
-            mode=internal_mode  # Pass the mapped mode to trigger the ReAct orchestrator
+            mode="agentic",
+            agentic_model=resolved_model,
         )
 
         logger.info("[SUCCESS] Research Pipeline Completed!")
@@ -91,7 +137,7 @@ def main():
         type=str,
         choices=["default", "langgraph", "agentic"],
         default="agentic",
-        help="Execution mode (default, langgraph, or agentic).",
+        help="Execution mode alias. All values route to agentic LangGraph deep-agent mode.",
     )
     parser.add_argument(
         "--rigor",
@@ -100,11 +146,21 @@ def main():
         default="prisma",
         help="Methodological rigor (exploratory, prisma, cochrane).",
     )
+    parser.add_argument(
+        "--model",
+        type=str,
+        default=os.getenv("OLLAMA_MODEL", "qwen2.5:3b"),
+        help="Ollama model name or fully qualified ollama:<model> (default: qwen2.5:3b).",
+    )
     args = parser.parse_args()
 
+    resolved_model = _normalize_ollama_model(args.model)
+    args.model = resolved_model
+
     # Expose to other components via environment variables
-    os.environ["RESEARCH_AGENT_MODE"] = args.mode
+    os.environ["RESEARCH_AGENT_MODE"] = "agentic"
     os.environ["RESEARCH_AGENT_RIGOR"] = args.rigor
+    os.environ["AGENTIC_MODEL"] = resolved_model
 
     print(
         f"""
@@ -112,35 +168,19 @@ def main():
     |       Research Agent System         |
     |   AI-Powered Research Assistant     |
     =======================================
-    Mode: {args.mode} | Rigor: {args.rigor}
+    Mode: agentic | Rigor: {args.rigor} | Model: {resolved_model}
     """
     )
 
     # Check requirements
-    if not check_requirements():
+    if not check_requirements(resolved_model):
         sys.exit(1)
 
     # Create necessary directories
     os.makedirs("outputs", exist_ok=True)
     os.makedirs("logs", exist_ok=True)
 
-    import asyncio
-    if args.mode in ["langgraph", "agentic"]:
-        asyncio.run(main_async(args))
-    else:
-        logger.info(
-            "Legacy mode selected: Routing via ResearchWorkflowOrchestrator to trigger custom agents."
-        )
-        # Using the orchestrator directly exposes the agents instantiated inside
-        from core.orchestrator import ResearchWorkflowOrchestrator
-
-        async def run_legacy():
-            orchestrator = ResearchWorkflowOrchestrator({"citation_format": "apa"})
-            project_id = await orchestrator.start_research_project("Demo", "Testing Agents")
-            await orchestrator.start_research_workflow(project_id, "literature_review", {"topic": "Quantum Machine Learning"})
-            logger.info("Legacy pipeline initialization complete.")
-
-        asyncio.run(run_legacy())
+    asyncio.run(main_async(args))
 
 
 if __name__ == "__main__":

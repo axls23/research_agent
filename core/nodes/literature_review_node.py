@@ -8,12 +8,23 @@ query formulation + multi-database search.
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from typing import Any, Dict
 
 from core.state import ResearchState, append_audit
 from core.tools.search_tools import search_multiple_databases
 
 logger = logging.getLogger(__name__)
+
+_GREY_LITERATURE_SOURCES = {
+    "clinicaltrials",
+    "clinicaltrials.gov",
+    "opengrey",
+    "medrxiv",
+    "biorxiv",
+    "who_ictrp",
+    "trialregister",
+}
 
 
 async def literature_review_node(
@@ -34,6 +45,8 @@ async def literature_review_node(
 
     topic = state["research_topic"]
     goals = state.get("research_goals", [])
+    min_year = int(cfgr.get("min_year", 2015))
+    max_year = int(cfgr.get("max_year", datetime.now(timezone.utc).year))
 
     # ---- Step 1: Formulate search queries ----
     if llm:
@@ -78,6 +91,14 @@ async def literature_review_node(
 
     logger.info(f"Total unique papers found: {len(unique_papers)}")
 
+    search_date_range = {
+        "min_year": min_year,
+        "max_year": max_year,
+    }
+    grey_literature_searched = any(
+        (db or "").lower() in _GREY_LITERATURE_SOURCES for db in all_dbs_searched
+    )
+
     # ---- Step 3: Update state ----
     audit_log = append_audit(
         state,
@@ -92,6 +113,8 @@ async def literature_review_node(
             "raw_hits": len(all_papers),
             "after_dedup": len(unique_papers),
             "databases_searched": list(all_dbs_searched),
+            "search_date_range": search_date_range,
+            "grey_literature_searched": grey_literature_searched,
             "paper_ids": [p["paper_id"] for p in unique_papers[:20]],
         },
     )
@@ -100,6 +123,8 @@ async def literature_review_node(
         "current_node": "literature_review",
         "search_queries": queries,
         "databases_searched": list(all_dbs_searched),
+        "search_date_range": search_date_range,
+        "grey_literature_searched": grey_literature_searched,
         "papers_found": len(unique_papers),
         "papers": unique_papers,
         "audit_log": audit_log,

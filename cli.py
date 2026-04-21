@@ -24,7 +24,6 @@ from textual import work
 
 # Import the core backend logic
 from core.graph import run_research_pipeline
-from core.llm_provider import create_llm_provider
 
 class ResearchAgentApp(App):
     """A Textual app for running and monitoring the Research AI Agent."""
@@ -94,9 +93,9 @@ class ResearchAgentApp(App):
                     value="prisma"
                 )
                 yield Select(
-                    [("Groq Inference", "groq"), ("Local vLLM", "vllm")],
+                    [("Ollama (Qwen 3B)", "ollama")],
                     id="provider_select",
-                    value="groq"
+                    value="ollama"
                 )
             
             yield Button("Start Research Pipeline", id="run_btn", variant="success")
@@ -129,7 +128,6 @@ class ResearchAgentApp(App):
             log = self.query_one(Log)
             log.clear()
             log.write_line(f"[cyan]Initializing pipeline for topic:[/] {topic}")
-            internal_mode = "agentic" if mode == "agentic" else "deterministic"
             log.write_line(f"[dim]Mode: {mode} | Rigor: {rigor} | Provider: {provider}[/]")
             
             # Start the background async task
@@ -145,7 +143,9 @@ class ResearchAgentApp(App):
     ) -> None:
         """Runs the LangGraph pipeline asynchronously without blocking the TUI."""
         log = self.query_one(Log)
-        internal_mode = "agentic" if mode == "agentic" else "deterministic"
+        requested_mode = (mode or "agentic").lower()
+        if requested_mode != "agentic":
+            log.write_line(f"[yellow]Mode '{requested_mode}' requested; routing to agentic mode.[/]")
         
         try:
             # We mock console print outputs to our Log UI component
@@ -174,21 +174,9 @@ class ResearchAgentApp(App):
                 f"Extract hyperedges defining {topic}"
             ]
 
-            llm = None
-            agentic_model = None
-            if provider == "vllm":
-                local_model = os.getenv("RLM_PRIMARY_MODEL", "Qwen/Qwen2.5-1.5B-Instruct")
-                vllm_base = os.getenv("OPENAI_API_BASE", os.getenv("RLM_MODEL_BASE_URL", "http://localhost:8000/v1"))
-                os.environ["OPENAI_API_BASE"] = vllm_base
-                os.environ.setdefault("OPENAI_API_KEY", "vllm-dummy-key")
-                llm = create_llm_provider(provider="openai", model=local_model)
-                agentic_model = f"fast_rlm:{local_model}"
-                log.write_line(f"[yellow]Using local vLLM at {vllm_base} with model {local_model}[/]")
-            else:
-                groq_model = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
-                llm = create_llm_provider(provider="groq", model=groq_model)
-                agentic_model = os.getenv("AGENTIC_GROQ_MODEL", "groq:llama-3.3-70b-versatile")
-                log.write_line(f"[green]Using Groq model {groq_model}[/]")
+            configured_model = os.getenv("AGENTIC_MODEL") or os.getenv("OLLAMA_MODEL", "qwen2.5:3b")
+            agentic_model = configured_model if configured_model.lower().startswith("ollama:") else f"ollama:{configured_model}"
+            log.write_line(f"[green]Using Ollama model {agentic_model}[/]")
             
             # Execute the graph
             result_state = await run_research_pipeline(
@@ -197,8 +185,7 @@ class ResearchAgentApp(App):
                 research_goals=goals,
                 rigor_level=rigor,
                 interactive=False, 
-                llm=llm,
-                mode=internal_mode,
+                mode="agentic",
                 agentic_model=agentic_model,
             )
             

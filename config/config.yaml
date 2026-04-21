@@ -11,8 +11,8 @@ system:
 
 # ===== LLM Configuration =====
 llm:
-  provider: "google"  # google | openai | anthropic | groq | airllm
-  model: "gemini-2.0-flash-exp"
+  provider: "ollama"  # ollama | openai | anthropic | groq | airllm
+  model: "qwen2.5:3b"
   temperature: 0.7
   max_tokens: 8192
   timeout: 120
@@ -42,13 +42,13 @@ llm:
   # Agents pick the right tier; all use the same GROQ_API_KEY.
   tiers:
     fast:  # RETRIEVE + GROUND phase (classification, screening, queries)
-      provider: "fast_rlm"
-      model: "primary"
+      provider: "ollama"
+      model: "qwen2.5:3b"
       temperature: 0.1
 
     deep:  # REASON + GENERATE phase (synthesis, analysis, writing)
-      provider: "fast_rlm"
-      model: "primary"
+      provider: "ollama"
+      model: "qwen2.5:3b"
       temperature: 0.7
 
   # Agent-to-tier mapping
