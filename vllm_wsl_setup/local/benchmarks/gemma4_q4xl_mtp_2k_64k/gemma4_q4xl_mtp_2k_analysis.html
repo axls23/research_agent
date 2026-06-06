@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gemma 4 12B Q4_K_XL vs Q8 MTP Assistant 2K Benchmark</title>
+<style>
+body{margin:0;background:#f6f7f4;color:#202124;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}main{max-width:1120px;margin:0 auto;padding:34px 24px 60px}h1{font-size:32px;margin:0 0 8px}h2{margin-top:30px;font-size:22px}p,li{line-height:1.5}.subtle{color:#5f6368}.callout{background:#fff;border-left:5px solid #b45f35;padding:14px 16px;margin:20px 0;border-radius:6px;box-shadow:0 0 0 1px #dedede inset}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:18px}.panel{background:#fff;border:1px solid #dadce0;border-radius:8px;padding:18px}table{width:100%;border-collapse:collapse;background:#fff;border:1px solid #dadce0}th,td{text-align:left;border-bottom:1px solid #e4e6e8;padding:9px 10px;font-size:14px}th{background:#eef2f1}code{background:#eceff1;padding:1px 4px;border-radius:4px}img{width:100%;height:auto;border:1px solid #dadce0;border-radius:8px;background:#fff}
+</style>
+</head>
+<body><main>
+<h1>Gemma 4 12B Q4_K_XL vs Q8 MTP Assistant</h1>
+<p class="subtle">2K-class input / 2048-token output benchmark at 64K context. Generated 2026-06-03T14:12:28 local time.</p>
+<div class="callout"><strong>Result:</strong> in this local llama.cpp branch run, the Q8_0 MTP assistant was active but slower than target-only. Coding generation ran at 43.35 tok/s target-only vs 31.64 tok/s with MTP. General generation ran at 42.51 tok/s target-only vs 26.23 tok/s with MTP.</div>
+<div class="grid"><section class="panel"><h2>Configuration</h2><ul><li>Target: <code>gemma-4-12b-it-UD-Q4_K_XL.gguf</code></li><li>Assistant: <code>gemma-4-12B-it-assistant-Q8_0.gguf</code></li><li>Context: <code>65536</code>; batch <code>4096</code>; ubatch <code>512</code>; flash attention on</li><li>MTP lane: <code>--spec-type draft-mtp</code>, draft max <code>3</code>, draft KV <code>q8_0/q8_0</code></li><li>Generation: <code>n_predict=2048</code>, <code>temperature=0</code>, server <code>--ignore-eos</code></li></ul></section><section class="panel"><h2>Interpretation</h2><p>The assistant did produce accepted draft tokens, but the cost of the assistant path outweighed the accepted-token savings for these two long forced-decoding prompts on this machine. The coding acceptance rate was 54.0%; the general acceptance rate was 35.9%.</p><p>Because EOS was ignored to force exactly 2048 output tokens, generated text quality is not the subject of this run. Outputs diverged between target-only and MTP, so treat this report as a throughput and runtime-activity benchmark, not a correctness equivalence test.</p></section></div>
+<h2>Summary Table</h2><table><thead><tr><th>Prompt</th><th>Input tokens</th><th>Output tokens</th><th>Target-only tok/s</th><th>MTP tok/s</th><th>MTP speed</th><th>Result</th><th>Acceptance</th><th>Accepted / generated draft tokens</th></tr></thead><tbody><tr><td>coding</td><td>2053</td><td>2048</td><td>43.35</td><td>31.64</td><td>73.0%</td><td>1.37x slower</td><td>54.0%</td><td>1266 / 2343</td></tr>
+<tr><td>general</td><td>2059</td><td>2048</td><td>42.51</td><td>26.23</td><td>61.7%</td><td>1.62x slower</td><td>35.9%</td><td>1061 / 2958</td></tr></tbody></table>
+<h2>Charts</h2><p><img src="chart-throughput.svg" alt="Generation throughput chart"></p><p><img src="chart-wall-time.svg" alt="Wall-clock request time chart"></p><p><img src="chart-acceptance.svg" alt="MTP draft acceptance chart"></p>
+<h2>Raw Measurements</h2><table><thead><tr><th>Prompt</th><th>Lane</th><th>Input tokens</th><th>Output tokens</th><th>Prompt tok/s</th><th>Generation tok/s</th><th>Wall seconds</th><th>Acceptance</th></tr></thead><tbody><tr><td>coding</td><td>target-only</td><td>2053</td><td>2048</td><td>490.05</td><td>43.35</td><td>51.43</td><td></td></tr>
+<tr><td>general</td><td>target-only</td><td>2059</td><td>2048</td><td>384.28</td><td>42.51</td><td>53.68</td><td></td></tr>
+<tr><td>coding</td><td>mtp-q8</td><td>2053</td><td>2048</td><td>478.05</td><td>31.64</td><td>69.03</td><td>54.0%</td></tr>
+<tr><td>general</td><td>mtp-q8</td><td>2059</td><td>2048</td><td>429.93</td><td>26.23</td><td>83.02</td><td>35.9%</td></tr></tbody></table>
+<h2>Artifacts</h2><ul><li><code>results.json</code>: machine-readable metrics</li><li><code>response-*.json</code> and <code>response-*.txt</code>: retained raw responses</li><li><code>logs/server-target-only.log</code> and <code>logs/server-mtp-q8.log</code>: llama-server load and timing logs</li><li><code>prompts/coding.txt</code> and <code>prompts/general.txt</code>: exact prompts</li></ul>
+</main></body></html>

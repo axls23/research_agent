@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 
 _VALIDATED_AGENTIC_STAGES = {
-    "literature_review",
+    "dark_data_ingestion",
     "data_processing",
     "analysis",
 }
@@ -57,10 +57,10 @@ def _utc_now_iso() -> str:
 
 
 def _resolve_rigor_level() -> str:
-    raw = (os.getenv("RESEARCH_AGENT_RIGOR") or "exploratory").strip().lower()
+    raw = (os.getenv("RESEARCH_AGENT_RIGOR") or "prisma").strip().lower()
     if raw in {"prisma", "cochrane", "exploratory"}:
         return raw
-    return "exploratory"
+    return "prisma"
 
 
 def _fail_closed_enabled(rigor_level: str) -> bool:
@@ -171,113 +171,97 @@ async def _validate_stage_or_raise(
 # Literature Search Tool
 # ---------------------------------------------------------------------------
 
-
-async def search_literature(
-    topic: str,
-    research_goals: list[str],
-    min_year: str = "2015",
-    max_results_per_db: str = "5",
-    snowball: str = "true",
+async def literature_search(
+    topics: list[str],
+    max_results_per_db: int = 10
 ) -> dict:
-    """Search academic databases for papers relevant to a research topic.
-
-    Uses PICO decomposition to formulate boolean queries, searches
-    ArXiv, Semantic Scholar, and Crossref in parallel, deduplicates
-    results, and optionally snowballs citations from top papers.
+    """Search academic databases (arXiv, Semantic Scholar) for research papers.
 
     Args:
-        topic: The research question or topic to search for.
-        research_goals: List of specific research objectives.
-        min_year: Earliest publication year to include.
-        max_results_per_db: Maximum papers per database per query.
-        snowball: Whether to follow citations from top papers.
+        topics: List of research topics/queries to search for.
+        max_results_per_db: Max results to fetch per database.
 
     Returns:
-        Dict with keys: status, papers, papers_found, queries, search_log
+        Dict containing status and retrieved papers.
     """
-    from agents.literature_review_agent import LiteratureReviewAgent
-    from core.llm_provider import create_llm_from_config
-
-    llm = None
-    try:
-        llm = create_llm_from_config()
-    except Exception as e:
-        logger.warning(f"Failed to initialize LLM for literature search tool: {e}")
-
-    agent = LiteratureReviewAgent(llm=llm)
-
-    # Step 1: Formulate queries
-    query_result = await agent.process(
-        {
-            "action": "formulate_search_query",
-            "topic": topic,
-            "research_goals": research_goals,
-            "min_year": int(min_year),
-        }
-    )
-
-    # Step 2: Retrieve papers
-    retrieval_result = await agent.process(
-        {
-            "action": "retrieve_papers",
-            "queries": query_result.get("queries", [topic]),
-            "max_results_per_db": int(max_results_per_db),
-            "snowball": snowball.lower() == "true",
-        }
-    )
-
-    # Step 3: Filter papers
-    filter_result = await agent.process(
-        {
-            "action": "filter_papers",
-            "papers": retrieval_result.get("papers", []),
-            "topic": topic,
-            "research_goals": research_goals,
-            "min_year": int(min_year),
-        }
-    )
-
-    included = [
-        p for p in filter_result.get("filtered_papers", []) if p.get("included", False)
-    ]
-
+    from core.tools.search_tools import search_multiple_databases
+    
+    records = await search_multiple_databases(topics, max_results_per_db=max_results_per_db)
+    
     with _AGENTIC_STATE_LOCK:
-        _AGENTIC_STATE["papers"].extend(included)
-
-    databases_searched = retrieval_result.get("databases_searched", [])
-    try:
-        min_year_int = int(min_year)
-    except (TypeError, ValueError):
-        min_year_int = 2015
-    search_date_range = {
-        "min_year": min_year_int,
-        "max_year": datetime.now(timezone.utc).year,
-    }
-
+        _AGENTIC_STATE["papers"].extend(records)
+        
     validation = await _validate_stage_or_raise(
         stage="literature_review",
         state_snapshot={
             "rigor_level": _resolve_rigor_level(),
-            "search_queries": query_result.get("queries", []),
-            "databases_searched": databases_searched,
-            "papers_found": len(included),
-            "papers": included,
-            "search_date_range": search_date_range,
-            "grey_literature_searched": any(
-                (db or "").lower() in _GREY_LITERATURE_SOURCES
-                for db in databases_searched
-            ),
+            "search_queries": topics,
+            "papers_found": len(records),
+            "papers": records,
+        },
+    )
+    
+    payload = {
+        "status": "completed",
+        "papers_found": len(records),
+        "queries": topics,
+        "validation": validation,
+    }
+    
+    _record_stage_event("literature_review", payload, validation=validation)
+    return payload
+
+
+# ---------------------------------------------------------------------------
+# Dark Data Ingestion Tool
+# ---------------------------------------------------------------------------
+
+
+async def ingest_dark_data(
+    topic: str,
+    source_patterns: Optional[list[str]] = None,
+    max_files: str = "120",
+) -> dict:
+    """Ingest enterprise dark data from local filesystem sources.
+
+    Args:
+        topic: Topic string used as ingestion context.
+        source_patterns: Optional local glob patterns.
+        max_files: Maximum number of files to ingest.
+
+    Returns:
+        Dict with keys: status, papers, papers_found, databases_searched.
+    """
+    from core.nodes.dark_data_ingestion_node import ingest_local_sources, normalize_record
+
+    patterns = source_patterns or ["data/**/*", "inputs/**/*", "papers/**/*", "chunks/**/*"]
+    raw_records = ingest_local_sources(patterns, max_files=int(max_files))
+    records = [normalize_record(r) for r in raw_records]
+
+    with _AGENTIC_STATE_LOCK:
+        _AGENTIC_STATE["papers"].extend(records)
+
+    validation = await _validate_stage_or_raise(
+        stage="dark_data_ingestion",
+        state_snapshot={
+            "rigor_level": _resolve_rigor_level(),
+            "search_queries": [topic],
+            "databases_searched": ["local_filesystem"],
+            "papers_found": len(records),
+            "papers": records,
+            "search_date_range": {
+                "min_year": datetime.now(timezone.utc).year,
+                "max_year": datetime.now(timezone.utc).year,
+            },
+            "grey_literature_searched": False,
             "audit_log": [
                 {
                     "timestamp": _utc_now_iso(),
-                    "agent": "search_literature_tool",
-                    "action": "search_literature",
+                    "agent": "ingest_dark_data_tool",
+                    "action": "ingest_dark_data",
                     "input_hash": "tool",
-                    "output_summary": f"Found {len(included)} included papers",
-                    "provenance": {
-                        "search_date_range": search_date_range,
-                        "databases_searched": databases_searched,
-                    },
+                    "output_summary": f"Ingested {len(records)} local records",
+                    "provenance": {"source_patterns": patterns},
                 }
             ],
         },
@@ -285,20 +269,51 @@ async def search_literature(
 
     payload = {
         "status": "completed",
-        "papers": included,
-        "papers_found": len(included),
-        "queries": query_result.get("queries", []),
-        "databases_searched": databases_searched,
-        "search_date_range": search_date_range,
+        "papers": records,
+        "papers_found": len(records),
+        "queries": [topic],
+        "databases_searched": ["local_filesystem"],
         "validation": validation,
-        "search_log": {
-            "pico": query_result.get("pico", {}),
-            "screening": filter_result.get("screening_log", {}),
+        "ingestion_log": {
+            "source_patterns": patterns,
+            "max_files": int(max_files),
         },
     }
 
-    _record_stage_event("literature_review", payload, validation=validation)
+    _record_stage_event("dark_data_ingestion", payload, validation=validation)
     return payload
+
+
+async def rosetta_translate(
+    records: list[dict],
+    top_n: str = "30",
+) -> dict:
+    """Translate domain-specific jargon into shared core principles."""
+    from core.nodes.rosetta_core_node import translate_records_jargon
+
+    mappings = translate_records_jargon(records, top_n=int(top_n))
+    with _AGENTIC_STATE_LOCK:
+        for mapping in mappings:
+            _AGENTIC_STATE["hyperedges"].append(
+                {
+                    "hyperedge_id": f"tool_he_{mapping.get('term', 'unknown')}",
+                    "principle_name": mapping.get("core_principle", "generalized_system_principle"),
+                    "member_entity_ids": [],
+                    "domain_jargon": [mapping.get("term", "")],
+                    "weight": 0.5,
+                    "paper_ids": [r.get("paper_id", "") for r in records if r.get("paper_id")],
+                    "checklist_tags": ["prisma.item.core_principle_hyperedge"],
+                    "source_entity_labels": ["core_principle"],
+                }
+            )
+    return {
+        "status": "completed",
+        "mappings": mappings,
+        "count": len(mappings),
+    }
+
+
+
 
 
 # ---------------------------------------------------------------------------
@@ -818,7 +833,8 @@ SYNC_TOOLS = [
 
 # Async tools (need await)
 ASYNC_TOOLS = [
-    search_literature,
+    ingest_dark_data,
+    rosetta_translate,
     process_documents,
     extract_prisma_knowledge,
     analyze_evidence,

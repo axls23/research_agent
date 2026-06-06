@@ -117,6 +117,8 @@ class Hyperedge(TypedDict):
     domain_jargon: List[str]  # Original domain terms that map to this principle
     weight: float  # Confidence score (0-1)
     paper_ids: List[str]  # Source papers
+    checklist_tags: List[str]  # PRISMA checklist tags attached to supporting evidence
+    source_entity_labels: List[str]  # Labels of entities participating in this hyperedge
 
 
 class IsomorphicCluster(TypedDict):
@@ -195,7 +197,7 @@ class ResearchState(TypedDict):
     # ---- Knowledge Graph ----
     knowledge_entities: List[KnowledgeEntity]
     knowledge_graph_id: Optional[str]
-    knowledge_graph_summary: Optional[Dict[str, Any]]  # Neo4j/Qdrant stats
+    knowledge_graph_summary: Optional[Dict[str, Any]]  # Neo4j/Vector stats
 
     # ---- NEXUS Isomorphic Mapping (Hypergraph Layer) ----
     hyperedges: List[Hyperedge]
@@ -304,9 +306,18 @@ def merge_hyperedges(
             merged["domain_jargon"] = list(
                 set(merged["domain_jargon"]) | set(h["domain_jargon"])
             )
+            merged["checklist_tags"] = list(
+                set(merged.get("checklist_tags", [])) | set(h.get("checklist_tags", []))
+            )
+            merged["source_entity_labels"] = list(
+                set(merged.get("source_entity_labels", [])) | set(h.get("source_entity_labels", []))
+            )
             merged["weight"] = (merged["weight"] + h["weight"]) / 2.0
         else:
-            index[key] = dict(h)  # type: ignore[misc]
+            entry = dict(h)  # type: ignore[misc]
+            entry.setdefault("checklist_tags", [])
+            entry.setdefault("source_entity_labels", [])
+            index[key] = entry
 
     return list(index.values())  # type: ignore[return-value]
 

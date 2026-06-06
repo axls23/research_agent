@@ -1,28 +1,30 @@
-# Research Agent System
+# NEXUS Enterprise Mapping System
 
-An AI-powered academic research assistant that uses a **multi-agent
-architecture** to help researchers reduce information overload.
+A local-first multi-agent system for enterprise DeepTech R&D teams. The
+platform ingests siloed dark data, translates domain jargon into shared
+principles, and builds graph-linked insights for cross-team reuse.
 
 ## Why Multi-Agent?
 
-Academic research spans distinct phases — literature discovery, data
-processing, analysis, writing, and knowledge management.  A multi-agent
-design maps each phase to a **dedicated, independently testable agent**
-coordinated by a lightweight orchestrator:
+Enterprise discovery spans distinct phases: dark-data ingestion, normalization,
+jargon translation, graph extraction, analysis, and report synthesis. A
+multi-agent design maps each phase to a **dedicated, independently testable
+agent** coordinated by a lightweight orchestrator:
 
 | Agent | Responsibility |
 |---|---|
-| **LiteratureReviewAgent** | Search-query formulation, paper retrieval & relevance filtering |
+| **DarkDataIngestionAgent** | Local artifact ingestion and record normalization |
+| **RosettaCoreAgent** | Jargon translation into shared core principles |
 | **DataProcessingAgent** | Document ingestion, text extraction, chunking |
 | **AnalysisAgent** | Exploratory data analysis, statistical testing, visualization |
-| **WritingAssistantAgent** | Literature synthesis, results summarization, outline generation |
+| **WritingAssistantAgent** | Insight synthesis, results summarization, outline generation |
 | **KnowledgeGraphAgent** | Knowledge-graph creation, entity extraction, cross-paper querying |
 | **CollaborationAgent** | Task delegation, progress tracking, shared context |
 
 Benefits:
 - **Separation of concerns** – each agent has a small, focused prompt context
 - **Composable workflows** – the orchestrator chains agents into configurable
-  research pipelines (e.g. *literature review → knowledge extraction → synthesis*)
+  pipelines (e.g. *dark data ingestion → Rosetta translation → graph extraction*)
 - **Independent testing** – every agent is unit-testable in isolation (60 tests)
 - **Extensibility** – new agents or workflows can be added without touching
   existing ones
@@ -32,7 +34,9 @@ Benefits:
 ```
 research_agent/
 ├── agents/                    # Specialized research agents
-│   ├── literature_review_agent.py
+│   ├── dark_data_ingestion_agent.py
+│   ├── rosetta_core_agent.py
+│   ├── literature_review_agent.py   # legacy compatibility
 │   ├── data_processing_agent.py
 │   ├── analysis_agent.py
 │   ├── writing_assistant_agent.py
@@ -79,20 +83,20 @@ pip install -e .
 ```python
 from core.orchestrator import ResearchWorkflowOrchestrator
 
-# Initialize orchestrator with researcher preferences
+# Initialize orchestrator with preferences
 orchestrator = ResearchWorkflowOrchestrator({"citation_format": "apa"})
 
 # Start a research project
 project_id = await orchestrator.start_research_project(
-    "AI Research Project",
-    "Analysis of recent AI developments"
+    "NEXUS Pilot",
+    "Cross-silo mapping of aerospace telemetry and reliability data"
 )
 
 # Start a workflow pipeline
 workflow_id = await orchestrator.start_research_workflow(
     project_id,
-    "literature_review",
-    custom_parameters={"focus_area": "machine_learning"}
+    "dark_data_mapping",
+    custom_parameters={"source_patterns": ["data/**/*", "inputs/**/*"]}
 )
 
 # Check progress and get suggestions

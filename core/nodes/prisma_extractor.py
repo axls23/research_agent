@@ -23,6 +23,21 @@ from pydantic import BaseModel, Field
 logger = logging.getLogger(__name__)
 
 
+_CHECKLIST_TAGS_BY_LABEL = {
+    "objective": ["prisma.item.objective_pico"],
+    "methodology": ["prisma.item.methodology_eligibility", "prisma.item.information_sources"],
+    "result": ["prisma.item.results_certainty"],
+    "limitation": ["prisma.item.limitations_implications"],
+    "implication": ["prisma.item.limitations_implications"],
+    "paper": ["prisma.item.transparency"],
+    "core_principle": ["prisma.item.core_principle_hyperedge"],
+}
+
+
+def _checklist_tags_for_label(label: str) -> List[str]:
+    return list(_CHECKLIST_TAGS_BY_LABEL.get(label, ["prisma.item.unspecified"]))
+
+
 # ---------------------------------------------------------------------------
 # Grounding Verification
 # ---------------------------------------------------------------------------
@@ -332,6 +347,7 @@ def extract_entities_gliner(
                 "gliner_label": gliner_label,
                 "gliner_score": round(score, 3),
                 "extraction_tier": "gliner",
+                "checklist_tags": _checklist_tags_for_label(prisma_label),
             },
         }
         entities.append(entity)
@@ -357,6 +373,9 @@ def extract_entities_gliner(
 
 PRISMA_EXTRACTION_SYSTEM_PROMPT = """You are a systematic review data extractor following PRISMA 2020 guidelines.
 You receive a text chunk from an academic paper along with pre-identified entity spans.
+
+Treat the PRISMA checklist as the default reasoning rubric for each paper,
+and attach checklist-traceable metadata to every extracted insight.
 
 Extract PRISMA-aligned structured data following these rules:
 
@@ -479,6 +498,7 @@ async def extract_prisma_structured(
     for obj in result.objectives:
         eid = str(uuid.uuid4())[:8]
         props: Dict[str, Any] = {"extraction_tier": "llm"}
+        props["checklist_tags"] = _checklist_tags_for_label("objective")
         if obj.pico:
             props["pico"] = obj.pico.model_dump()
         entities.append(
@@ -497,6 +517,7 @@ async def extract_prisma_structured(
         eid = str(uuid.uuid4())[:8]
         props = {
             "extraction_tier": "llm",
+            "checklist_tags": _checklist_tags_for_label("methodology"),
             "inclusion_criteria": meth.inclusion_criteria,
             "exclusion_criteria": meth.exclusion_criteria,
             "information_sources": meth.information_sources,
@@ -520,6 +541,7 @@ async def extract_prisma_structured(
         eid = str(uuid.uuid4())[:8]
         props = {
             "extraction_tier": "llm",
+            "checklist_tags": _checklist_tags_for_label("result"),
             "study_flow": res.study_flow,
             "effect_estimates": res.effect_estimates,
             "certainty_assessment": res.certainty_assessment,
@@ -544,7 +566,10 @@ async def extract_prisma_structured(
                 "label": "limitation",
                 "text": lim.text,
                 "paper_ids": [paper_id],
-                "prisma_properties": {"extraction_tier": "llm"},
+                "prisma_properties": {
+                    "extraction_tier": "llm",
+                    "checklist_tags": _checklist_tags_for_label("limitation"),
+                },
             }
         )
         relations.append((paper_text, "HAS_LIMITATION", lim.text))
@@ -558,7 +583,10 @@ async def extract_prisma_structured(
                 "label": "implication",
                 "text": imp.text,
                 "paper_ids": [paper_id],
-                "prisma_properties": {"extraction_tier": "llm"},
+                "prisma_properties": {
+                    "extraction_tier": "llm",
+                    "checklist_tags": _checklist_tags_for_label("implication"),
+                },
             }
         )
         # Implications are linked from result nodes
@@ -570,6 +598,7 @@ async def extract_prisma_structured(
     if result.transparency:
         transparency_props = {
             "extraction_tier": "llm",
+            "checklist_tags": _checklist_tags_for_label("paper"),
             "funding_sources": result.transparency.funding_sources,
             "data_availability": result.transparency.data_availability,
         }
@@ -594,6 +623,7 @@ async def extract_prisma_structured(
                 "paper_ids": [paper_id],
                 "prisma_properties": {
                     "extraction_tier": "llm",
+                    "checklist_tags": _checklist_tags_for_label("core_principle"),
                     "domain_jargon": cp.domain_jargon,
                     "explanation": cp.explanation
                 },
@@ -602,6 +632,7 @@ async def extract_prisma_structured(
         relations.append((paper_text, "EXEMPLIFIES_PRINCIPLE", cp.abstract_principle))
 
     # --- Hyperedges ---
+    entity_by_id = {ent.get("entity_id"): ent for ent in entities}
     for he in result.hyperedges:
         # Resolve involved entity texts to our generated entity IDs where possible
         resolved_ids = []
@@ -622,13 +653,32 @@ async def extract_prisma_structured(
         if principle_ent_id and principle_ent_id not in resolved_ids:
             resolved_ids.append(principle_ent_id)
 
+        source_labels = []
+        checklist_tags = set()
+        for rid in resolved_ids:
+            ent = entity_by_id.get(rid)
+            if not ent:
+                continue
+            label = ent.get("label", "")
+            if label:
+                source_labels.append(label)
+            props = ent.get("prisma_properties") or {}
+            if isinstance(props, dict):
+                for tag in props.get("checklist_tags", []):
+                    checklist_tags.add(tag)
+
+        if not checklist_tags:
+            checklist_tags.update(_checklist_tags_for_label("core_principle"))
+
         hyperedges.append({
             "hyperedge_id": str(uuid.uuid4())[:8],
             "principle_name": he.principle_name,
             "member_entity_ids": list(set(resolved_ids)),
             "domain_jargon": [],  # Can track distinct jargons later when reducing graph
             "weight": max(0.0, min(1.0, he.hyperedge_weight)),
-            "paper_ids": [paper_id]
+            "paper_ids": [paper_id],
+            "checklist_tags": sorted(checklist_tags),
+            "source_entity_labels": sorted(set(source_labels)),
         })
 
     # Final pass: check grounding and build final list

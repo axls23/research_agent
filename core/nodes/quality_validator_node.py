@@ -25,13 +25,22 @@ logger = logging.getLogger(__name__)
 
 _CRITIQUE_TEMPLATES: Dict[str, str] = {
     "post_literature_review": (
-        "Review this systematic search for methodological blind spots:\n"
-        "- Databases searched: {databases_searched}\n"
-        "- Papers found: {papers_found}\n"
-        "- Search queries used: {search_queries}\n"
+        "Review this literature search stage for methodological blind spots:\n"
+        "- Sources indexed: {databases_searched}\n"
+        "- Records found: {papers_found}\n"
+        "- Topic intent: {search_queries}\n"
         "- Rigor level: {rigor_level}\n\n"
-        "Check for: missing databases, narrow search terms, publication bias, "
-        "language bias, date range gaps. Be concise and specific."
+        "Check for: missing databases, weak query coverage, poor date-range"
+        " constraints, and grey-literature omissions. Be concise and specific."
+    ),
+    "post_dark_data_ingestion": (
+        "Review this dark-data ingestion stage for enterprise blind spots:\n"
+        "- Sources indexed: {databases_searched}\n"
+        "- Records found: {papers_found}\n"
+        "- Topic intent: {search_queries}\n"
+        "- Rigor level: {rigor_level}\n\n"
+        "Check for: missing data connectors, poor source diversity, "
+        "schema drift, and ingestion truncation risk. Be concise and specific."
     ),
     "post_data_processing": (
         "Review this data extraction step:\n"
@@ -73,6 +82,7 @@ async def quality_validator_node(
     # Map the current node to a gate name
     gate_map = {
         "literature_review": "post_literature_review",
+        "dark_data_ingestion": "post_dark_data_ingestion",
         "data_processing": "post_data_processing",
         "analysis": "post_analysis",
     }
@@ -80,6 +90,7 @@ async def quality_validator_node(
 
     gate_to_failed_stage = {
         "post_literature_review": "literature_review",
+        "post_dark_data_ingestion": "dark_data_ingestion",
         "post_data_processing": "data_processing",
         "post_analysis": "analysis",
     }

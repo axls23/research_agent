@@ -1,0 +1,180 @@
+Task 2: produce a detailed coding analysis. Be specific and structured.
+
+Analyze this TypeScript API gateway and propose production fixes. Cover auth propagation, timeout budgets, retries, streaming, tracing, input validation, cache invalidation, and tests.
+
+```ts
+export async function proxy(req: Request) {
+  const user = await getUser(req.headers.get("Authorization"));
+  const body = await req.json();
+  const cached = await cache.get(body.key);
+  if (cached) return Response.json(cached);
+  const r = await fetch(process.env.UPSTREAM!, { method: "POST", body: JSON.stringify(body) });
+  const data = await r.json();
+  await cache.set(body.key, data);
+  return Response.json(data);
+}
+```
+
+---
+Analyze this TypeScript API gateway and propose production fixes. Cover auth propagation, timeout budgets, retries, streaming, tracing, input validation, cache invalidation, and tests.
+
+```ts
+export async function proxy(req: Request) {
+  const user = await getUser(req.headers.get("Authorization"));
+  const body = await req.json();
+  const cached = await cache.get(body.key);
+  if (cached) return Response.json(cached);
+  const r = await fetch(process.env.UPSTREAM!, { method: "POST", body: JSON.stringify(body) });
+  const data = await r.json();
+  await cache.set(body.key, data);
+  return Response.json(data);
+}
+```
+
+---
+Analyze this TypeScript API gateway and propose production fixes. Cover auth propagation, timeout budgets, retries, streaming, tracing, input validation, cache invalidation, and tests.
+
+```ts
+export async function proxy(req: Request) {
+  const user = await getUser(req.headers.get("Authorization"));
+  const body = await req.json();
+  const cached = await cache.get(body.key);
+  if (cached) return Response.json(cached);
+  const r = await fetch(process.env.UPSTREAM!, { method: "POST", body: JSON.stringify(body) });
+  const data = await r.json();
+  await cache.set(body.key, data);
+  return Response.json(data);
+}
+```
+
+---
+Analyze this TypeScript API gateway and propose production fixes. Cover auth propagation, timeout budgets, retries, streaming, tracing, input validation, cache invalidation, and tests.
+
+```ts
+export async function proxy(req: Request) {
+  const user = await getUser(req.headers.get("Authorization"));
+  const body = await req.json();
+  const cached = await cache.get(body.key);
+  if (cached) return Response.json(cached);
+  const r = await fetch(process.env.UPSTREAM!, { method: "POST", body: JSON.stringify(body) });
+  const data = await r.json();
+  await cache.set(body.key, data);
+  return Response.json(data);
+}
+```
+
+---
+Analyze this TypeScript API gateway and propose production fixes. Cover auth propagation, timeout budgets, retries, streaming, tracing, input validation, cache invalidation, and tests.
+
+```ts
+export async function proxy(req: Request) {
+  const user = await getUser(req.headers.get("Authorization"));
+  const body = await req.json();
+  const cached = await cache.get(body.key);
+  if (cached) return Response.json(cached);
+  const r = await fetch(process.env.UPSTREAM!, { method: "POST", body: JSON.stringify(body) });
+  const data = await r.json();
+  await cache.set(body.key, data);
+  return Response.json(data);
+}
+```
+
+---
+Analyze this TypeScript API gateway and propose production fixes. Cover auth propagation, timeout budgets, retries, streaming, tracing, input validation, cache invalidation, and tests.
+
+```ts
+export async function proxy(req: Request) {
+  const user = await getUser(req.headers.get("Authorization"));
+  const body = await req.json();
+  const cached = await cache.get(body.key);
+  if (cached) return Response.json(cached);
+  const r = await fetch(process.env.UPSTREAM!, { method: "POST", body: JSON.stringify(body) });
+  const data = await r.json();
+  await cache.set(body.key, data);
+  return Response.json(data);
+}
+```
+
+---
+Analyze this TypeScript API gateway and propose production fixes. Cover auth propagation, timeout budgets, retries, streaming, tracing, input validation, cache invalidation, and tests.
+
+```ts
+export async function proxy(req: Request) {
+  const user = await getUser(req.headers.get("Authorization"));
+  const body = await req.json();
+  const cached = await cache.get(body.key);
+  if (cached) return Response.json(cached);
+  const r = await fetch(process.env.UPSTREAM!, { method: "POST", body: JSON.stringify(body) });
+  const data = await r.json();
+  await cache.set(body.key, data);
+  return Response.json(data);
+}
+```
+
+---
+Analyze this TypeScript API gateway and propose production fixes. Cover auth propagation, timeout budgets, retries, streaming, tracing, input validation, cache invalidation, and tests.
+
+```ts
+export async function proxy(req: Request) {
+  const user = await getUser(req.headers.get("Authorization"));
+  const body = await req.json();
+  const cached = await cache.get(body.key);
+  if (cached) return Response.json(cached);
+  const r = await fetch(process.env.UPSTREAM!, { method: "POST", body: JSON.stringify(body) });
+  const data = await r.json();
+  await cache.set(body.key, data);
+  return Response.json(data);
+}
+```
+
+---
+Analyze this TypeScript API gateway and propose production fixes. Cover auth propagation, timeout budgets, retries, streaming, tracing, input validation, cache invalidation, and tests.
+
+```ts
+export async function proxy(req: Request) {
+  const user = await getUser(req.headers.get("Authorization"));
+  const body = await req.json();
+  const cached = await cache.get(body.key);
+  if (cached) return Response.json(cached);
+  const r = await fetch(process.env.UPSTREAM!, { method: "POST", body: JSON.stringify(body) });
+  const data = await r.json();
+  await cache.set(body.key, data);
+  return Response.json(data);
+}
+```
+
+---
+Analyze this TypeScript API gateway and propose production fixes. Cover auth propagation, timeout budgets, retries, streaming, tracing, input validation, cache invalidation, and tests.
+
+```ts
+export async function proxy(req: Request) {
+  const user = await getUser(req.headers.get("Authorization"));
+  const body = await req.json();
+  const cached = await cache.get(body.key);
+  if (cached) return Response.json(cached);
+  const r = await fetch(process.env.UPSTREAM!, { method: "POST", body: JSON.stringify(body) });
+  const data = await r.json();
+  await cache.set(body.key, data);
+  return Response.json(data);
+}
+```
+
+---
+Analyze this TypeScript API gateway and propose production fixes. Cover auth propagation, timeout budgets, retries, streaming, tracing, input validation, cache invalidation, and tests.
+
+```ts
+export async function proxy(req: Request) {
+  const user = await getUser(req.headers.get("Authorization"));
+  const body = await req.json();
+  const cached = await cache.get(body.key);
+  if (cached) return Response.json(cached);
+  const r = await fetch(process.env.UPSTREAM!, { method: "POST", body: JSON.stringify(body) });
+  const data = await r.json();
+  await cache.set(body.key, data);
+  return Response.json(data);
+}
+```
+
+
+Now answer the task in depth. Do not summarize the prompt; provide the requested analysis.
+ Additional constraint: quantify tradeoffs, name failure modes, and include implementation details. Additional constraint: quantify tradeoffs, name failure modes, and include implementation details. Additional constraint: quantify tradeoffs, name failure modes, and include implementation details. Additional constraint: quantify tradeoffs, name failure modes, and include implementation details. Additional constraint: quantify tradeoffs, name failure modes, and include implementation details. Additional constraint: quantify tradeoffs, name failure modes, and include implementation details. Additional constraint: quantify tradeoffs, name failure modes, and include implementation details. Additional constraint: quantify tradeoffs, name failure modes, and include implementation details. Additional constraint: quantify tradeoffs, name failure modes, and include implementation details. Additional constraint: quantify tradeoffs, name failure modes, and include implementation details.

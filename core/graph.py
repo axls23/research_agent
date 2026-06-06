@@ -8,6 +8,8 @@ with validation gates, human-in-the-loop, and conditional routing.
 from __future__ import annotations
 
 import logging
+import uuid
+from dataclasses import dataclass
 from typing import Any, Dict, Literal, Optional
 
 from langgraph.graph import END, StateGraph
@@ -18,9 +20,11 @@ from core.llm_provider import (
     create_llm_from_config,
     create_tiered_providers,
 )
-from core.nodes.literature_review_node import literature_review_node
 from core.nodes.data_processing_node import data_processing_node
+from core.nodes.literature_review_node import literature_review_node
+from core.nodes.rosetta_core_node import rosetta_core_node
 from core.nodes.knowledge_graph_node import knowledge_graph_node
+from core.nodes.hypergraph_reasoning_node import hypergraph_reasoning_node
 from core.nodes.analysis_node import analysis_node
 from core.nodes.writing_node import writing_node
 from core.nodes.quality_validator_node import quality_validator_node
@@ -28,6 +32,18 @@ from core.nodes.human_intervention_node import human_intervention_node
 from core.nodes.audit_formatter_node import audit_formatter_node
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class _GraphEdge:
+    source: str
+    target: str
+
+
+class _GraphSnapshot:
+    def __init__(self, nodes: list[str], edges: list[_GraphEdge]):
+        self.nodes = nodes
+        self.edges = edges
 
 
 # ---------------------------------------------------------------------------
@@ -99,6 +115,46 @@ class EagerGraphRunner:
         self.entry_point = entry_point
         self.rigor_level = rigor_level
 
+    def get_graph(self) -> _GraphSnapshot:
+        """Return a lightweight graph snapshot for tests and introspection."""
+        nodes = list(self.nodes.keys())
+        edges: list[_GraphEdge] = [_GraphEdge("__start__", self.entry_point)]
+
+        if self.rigor_level == "exploratory":
+            edge_map = {
+                "literature_review": "data_processing",
+                "data_processing": "rosetta_core",
+                "rosetta_core": "knowledge_graph",
+                "knowledge_graph": "hypergraph_reasoning",
+                "hypergraph_reasoning": "analysis",
+                "analysis": "writing",
+                "writing": "audit_formatter",
+                "audit_formatter": "__end__",
+            }
+        else:
+            edge_map = {
+                "literature_review": "validator_post_lit",
+                "validator_post_lit": "data_processing",
+                "human_post_lit": "data_processing",
+                "data_processing": "validator_post_data",
+                "validator_post_data": "rosetta_core",
+                "human_post_data": "rosetta_core",
+                "rosetta_core": "knowledge_graph",
+                "knowledge_graph": "hypergraph_reasoning",
+                "hypergraph_reasoning": "analysis",
+                "analysis": "validator_post_analysis",
+                "validator_post_analysis": "writing",
+                "human_post_analysis": "writing",
+                "writing": "audit_formatter",
+                "audit_formatter": "__end__",
+            }
+
+        for source, target in edge_map.items():
+            if source in self.nodes or source in {"writing", "audit_formatter", "human_post_lit", "human_post_data", "human_post_analysis", "validator_post_lit", "validator_post_data", "validator_post_analysis"}:
+                edges.append(_GraphEdge(source, target))
+
+        return _GraphSnapshot(nodes=nodes, edges=edges)
+
     async def ainvoke(self, state: ResearchState, config: Dict[str, Any]) -> ResearchState:
         """Asynchronously run the graph eagerly."""
         logger.info(f"Starting EAGER execution loop from '{self.entry_point}'")
@@ -122,7 +178,7 @@ class EagerGraphRunner:
         }
         continue_target = {
             "human_post_lit": "data_processing",
-            "human_post_data": "knowledge_graph",
+            "human_post_data": "rosetta_core",
             "human_post_analysis": "writing",
         }
         
@@ -167,8 +223,10 @@ class EagerGraphRunner:
                 # Linear exploratory path
                 mapping = {
                     "literature_review": "data_processing",
-                    "data_processing": "knowledge_graph",
-                    "knowledge_graph": "analysis",
+                    "data_processing": "rosetta_core",
+                    "rosetta_core": "knowledge_graph",
+                    "knowledge_graph": "hypergraph_reasoning",
+                    "hypergraph_reasoning": "analysis",
                     "analysis": "writing",
                     "audit_formatter": "END"
                 }
@@ -197,7 +255,7 @@ class EagerGraphRunner:
                     next_node = "validator_post_data"
                 elif current_node == "validator_post_data":
                     route = _route_after_validation(state)
-                    next_node = "knowledge_graph" if route == "continue" else "human_post_data"
+                    next_node = "rosetta_core" if route == "continue" else "human_post_data"
                 elif current_node == "human_post_data":
                     route = _route_after_human(state)
                     if route == "retry":
@@ -207,7 +265,13 @@ class EagerGraphRunner:
                     else:
                         next_node = continue_target[current_node]
 
+                elif current_node == "rosetta_core":
+                    next_node = "knowledge_graph"
+
                 elif current_node == "knowledge_graph":
+                    next_node = "hypergraph_reasoning"
+
+                elif current_node == "hypergraph_reasoning":
                     next_node = "analysis"
 
                 elif current_node == "analysis":
@@ -256,7 +320,9 @@ def build_research_graph(
     nodes = {
         "literature_review": literature_review_node,
         "data_processing": data_processing_node,
+        "rosetta_core": rosetta_core_node,
         "knowledge_graph": knowledge_graph_node,
+        "hypergraph_reasoning": hypergraph_reasoning_node,
         "analysis": analysis_node,
         "writing": writing_node,
         "audit_formatter": audit_formatter_node,
@@ -312,51 +378,15 @@ async def run_research_pipeline(
     """
     requested_mode = (mode or "agentic").lower()
 
-    if rigor_level == "exploratory":
-        if requested_mode != "agentic":
-            logger.warning(
-                "Mode '%s' requested, but exploratory mode routes to agentic execution. Routing to agentic mode.",
-                requested_mode,
-            )
-        from core.orchestrator import run_agentic_pipeline
+    from core.orchestrator import run_agentic_pipeline
 
-        logger.info(f"Starting AGENTIC pipeline for EXPLORATORY: {project_name}")
-        result = await run_agentic_pipeline(
-            project_name=project_name,
-            research_topic=research_topic,
-            research_goals=research_goals,
-            model=agentic_model,
-            rigor_level=rigor_level,
-        )
-        logger.info("Agentic pipeline complete!")
-        return result
-    else:
-        logger.info(f"Starting DETERMINISTIC Eager pipeline for STRICT rigor ({rigor_level}): {project_name}")
-        
-        # Initialize state from the canonical constructor to keep counters,
-        # validation fields, and PRISMA defaults consistent across runs.
-        initial_state = make_initial_state(
-            project_id="unknown",
-            project_name=project_name,
-            research_topic=research_topic,
-            research_goals=research_goals,
-            rigor_level=rigor_level,
-        )
-
-        # Build eager graph
-        runner = build_research_graph(rigor_level=rigor_level)
-
-        # Forward runtime controls so strict runs stay non-interactive in harness/CI.
-        runtime_config = {
-            "configurable": {
-                "llm_deep": getattr(llm, "provider", None) if llm else None,
-                "interactive": interactive,
-                "allow_auto_override": allow_auto_override,
-            }
-        }
-
-        # Execute logic locally using EagerGraphRunner
-        final_state = await runner.ainvoke(initial_state, config=runtime_config)
-        
-        logger.info(f"Deterministic pipeline complete for {project_name}.")
-        return final_state
+    logger.info(f"Starting AGENTIC pipeline for rigor {rigor_level.upper()}: {project_name}")
+    result = await run_agentic_pipeline(
+        project_name=project_name,
+        research_topic=research_topic,
+        research_goals=research_goals,
+        model=agentic_model,
+        rigor_level=rigor_level,
+    )
+    logger.info("Agentic pipeline complete!")
+    return result

@@ -1,5 +1,26 @@
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
+## API Wiring
+
+The chat and backend monitor pages call the FastAPI backend.
+
+By default, the frontend targets:
+
+- `http://localhost:8000`
+
+To point to another backend host, set:
+
+- `NEXT_PUBLIC_API_BASE_URL=http://your-host:8000`
+
+Example on PowerShell:
+
+```powershell
+$env:NEXT_PUBLIC_API_BASE_URL="http://localhost:8000"
+npm run dev
+```
+
+The chat UI includes a harness toggle. When enabled, chat requests execute through the strict PRISMA harness path end to end.
+
 ## Getting Started
 
 First, run the development server:

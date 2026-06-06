@@ -26,3 +26,17 @@ test_output.txt
 
 # Generated data
 chunks/
+
+# WSL setup build directories and compiled libraries
+vllm_wsl_setup/llama-b9500/
+*.so
+*.dll
+*.dylib
+
+# GGUF models and compiled binaries
+*.gguf
+llama-server
+vllm_wsl_setup/local/gemma-4-*
+vllm_wsl_setup/local/llama-server
+
+

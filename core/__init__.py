@@ -11,9 +11,6 @@ Provides:
 
 from core.base_agent import ResearchAgent
 from core.orchestrator import (
-    ResearchWorkflowOrchestrator,
-    Task,
-    Workflow,
-    Context,
-    AgentRegistry,
+    run_agentic_pipeline,
+    build_orchestrator,
 )

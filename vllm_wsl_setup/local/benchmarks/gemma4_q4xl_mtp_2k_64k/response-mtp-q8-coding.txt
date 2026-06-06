@@ -1,0 +1,105 @@
+🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴R🔴🔴🔴🔴🔴🔴🔴🔴🔴RT🔴🔴🔴🔴🔴🔴🔴🔴🔴R🔴🔴🔴🔴🔴🔴🔴R🔴🔴🔴🔴🔴🔴🔴🔴🔴RT🔴🔴🔴🔴🔴🔴🔴🔴🔴R🔴🔴🔴🔴🔴🔴🔴🔴R🔴🔴🔴🔴🔴🔴🔴🔴🔴R🔴🔴🔴🔴🔴🔴🔴斤<|channel><|channel><|channel><|channel><|channel><|channel>ΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩ🔴🔴🔴🔴🔴 feder🔴🔴🔴斤<|channel><|channel>ΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩ100000000000000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000100000000000000000000000000000000000000000000000000000000000000000000001000000TTT🤤﷼﷼﷼﷼﷼﷼﷼﷼﷼﷼﷼﷼﷼﷼﷼﷼﷼﷼﷼﷼﷼﷼﷼🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴1000000000000000100000000000000000000000000000000000000100000000000010000000000000010000000000000000000000000000000000000000000000000000000000000🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴10000000000000000000000000000000000000000000000🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴T🤤﷼﷼﷼﷼﷼﷼﷼﷼﷼﷼﷼﷼﷼﷼﷼﷼﷼﷼﷼﷼﷼﷼﷼﷼﷼﷼﷼﷼﷼﷼﷼﷼﷼﷼﷼﷼﷼﷼🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴inesis
+<|channel>thought
+<channel|>This review identifies critical architectural flaws in the provided `WorkQueue` design—specifically regarding distributed systems reliability—and provides a production-grade implementation strategy.
+
+### 1. Critical Architectural Review
+
+#### A. Correctness & Concurrency (The "Double Lease" Problem)
+The current design is **not thread-safe or process-safe**.
+*   **Race Condition:** `lease()` performs a `next_pending()` followed by a `mark_running()`. In a concurrent environment (multiple workers), two workers can fetch the same job before either marks it as running.
+*   **In-Memory State:** `self.inflight` is a local dictionary. If the service restarts or scales to two nodes, Node A has no knowledge of Node B's inflight jobs. This leads to "ghost" jobs that stay in `running` status forever if a node crashes.
+
+#### B. Reliability & Transaction Boundaries
+*   **Atomicity:** The `lease` operation must be atomic. You cannot have a "fetch" and a "mark" as two separate database calls without a locking mechanism (e.g., `SELECT FOR UPDATE` or a `SKIP LOCKED` clause).
+*   **Poison Jobs:** If a job causes a hard crash (Segfault, OOM), it stays in `running` status. The system needs a "heartbeat" or a "visibility timeout" to reclaim jobs from dead workers.
+
+#### C. Observability & API Ergonomics
+*   **Lack of Context:** There is no support for `tracing` (OpenTelemetry) or `logging` context.
+*   **Error Handling:** `fail()` takes an `error` object but doesn't distinguish between "Retryable" (Network timeout) and "Non-Retryable" (Validation error) failures.
+
+---
+
+### 2. Improved Implementation Guidance
+
+To solve these issues, we must move the state into the Database and use **Atomic Locking**.
+
+#### Proposed Schema Shape
+*   `id`: UUID
+*   `status`: Enum (PENDING, RUNNING, DONE, DEAD)
+*   `worker_id`: String (Nullable)
+*   `attempts`: Integer
+*   `locked_at`: Timestamp (Used for visibility timeouts)
+*   `payload`: JSONB
+*   `last_error`: Text
+
+#### Concrete Implementation (Python)
+
+```python
+import asyncio
+import logging
+import uuid
+from datetime import datetime, timedelta
+from typing import Optional, Dict
+from dataclasses import dataclass
+
+# Assumption: Using a DB driver that supports "SKIP LOCKED" (Postgres/MySQL)
+# This is the industry standard for high-concurrency queues.
+
+@dataclass
+class Job:
+    id: str
+    payload: dict
+    attempts: int = 0
+
+class WorkQueue:
+    def __init__(self, db, retry_limit=3, visibility_timeout_sec=60):
+        self.db = db
+        self.retry_limit = retry_limit
+        self.visibility_timeout = visibility_timeout_sec
+        self.logger = logging.getLogger(__name__)
+
+    async def enqueue(self, payload: dict) -> str:
+        """Idempotent insertion of a new job."""
+        job_id = str(uuid.uuid4())
+        await self.db.execute(
+            "INSERT INTO jobs (id, payload, status, attempts) VALUES ($1, $2, 'PENDING', 0)",
+            job_id, payload
+        )
+        return job_id
+
+    async def lease(self, worker_id: str) -> Optional[Job]:
+        """
+        Atomic lease using SELECT FOR UPDATE SKIP LOCKED.
+        This prevents duplicate leases without application-level locks.
+        """
+        try:
+            # The SQL logic: 
+            # 1. Find a PENDING job OR a RUNNING job that exceeded its visibility timeout.
+            # 2. Lock that row so no other worker can see it.
+            # 3. Update status to RUNNING and set worker_id.
+            query = """
+                UPDATE jobs 
+                SET status = 'RUNNING', 
+                    worker_id = $1, 
+                    locked_at = NOW()
+                WHERE id = (
+                    SELECT id FROM jobs 
+                    WHERE status = 'PENDING' 
+                       OR (status = 'RUNNING' AND locked_at < NOW() - INTERVAL '$2 seconds')
+                    ORDER BY attempts ASC, id ASC
+                    LIMIT 1
+                    FOR UPDATE SKIP LOCKED
+                )
+                RETURNING id, payload, attempts;
+            """
+            result = await self.db.execute(query, worker_id, self.visibility_timeout)
+            
+            if not result:
+                return None
+            
+            return Job(id=result['id'], payload=result['payload'], attempts=result['attempts']])
+        except Exception as e:
+            self.logger.error(f"Lease failed: {e}")
+            raise
+
+    async def complete(self

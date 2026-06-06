@@ -1,0 +1,189 @@
+Task: produce a detailed coding answer. Use structured sections and be specific. The context below is repeated to create a controlled input length.
+
+Review and improve the following Python service design. Focus on correctness, reliability, concurrency, API ergonomics, observability, and tests. Return concrete implementation guidance with code-level examples.
+
+```python
+class WorkQueue:
+    def __init__(self, db, workers, retry_limit=3):
+        self.db = db
+        self.workers = workers
+        self.retry_limit = retry_limit
+        self.inflight = {}
+
+    async def enqueue(self, job):
+        await self.db.insert(job)
+
+    async def lease(self, worker_id):
+        job = await self.db.next_pending()
+        if job is None:
+            return None
+        self.inflight[job.id] = worker_id
+        await self.db.mark_running(job.id, worker_id)
+        return job
+
+    async def complete(self, job_id):
+        self.inflight.pop(job_id, None)
+        await self.db.mark_done(job_id)
+
+    async def fail(self, job_id, error):
+        self.inflight.pop(job_id, None)
+        job = await self.db.get(job_id)
+        if job.attempts >= self.retry_limit:
+            await self.db.mark_dead(job_id, error)
+        else:
+            await self.db.mark_pending(job_id, error)
+```
+
+Consider duplicate leases, transaction boundaries, cancellation, idempotency, lock contention, backoff, poison jobs, schema shape, metrics, traces, and how this should behave during deploys and database failover.
+
+---
+Review and improve the following Python service design. Focus on correctness, reliability, concurrency, API ergonomics, observability, and tests. Return concrete implementation guidance with code-level examples.
+
+```python
+class WorkQueue:
+    def __init__(self, db, workers, retry_limit=3):
+        self.db = db
+        self.workers = workers
+        self.retry_limit = retry_limit
+        self.inflight = {}
+
+    async def enqueue(self, job):
+        await self.db.insert(job)
+
+    async def lease(self, worker_id):
+        job = await self.db.next_pending()
+        if job is None:
+            return None
+        self.inflight[job.id] = worker_id
+        await self.db.mark_running(job.id, worker_id)
+        return job
+
+    async def complete(self, job_id):
+        self.inflight.pop(job_id, None)
+        await self.db.mark_done(job_id)
+
+    async def fail(self, job_id, error):
+        self.inflight.pop(job_id, None)
+        job = await self.db.get(job_id)
+        if job.attempts >= self.retry_limit:
+            await self.db.mark_dead(job_id, error)
+        else:
+            await self.db.mark_pending(job_id, error)
+```
+
+Consider duplicate leases, transaction boundaries, cancellation, idempotency, lock contention, backoff, poison jobs, schema shape, metrics, traces, and how this should behave during deploys and database failover.
+
+---
+Review and improve the following Python service design. Focus on correctness, reliability, concurrency, API ergonomics, observability, and tests. Return concrete implementation guidance with code-level examples.
+
+```python
+class WorkQueue:
+    def __init__(self, db, workers, retry_limit=3):
+        self.db = db
+        self.workers = workers
+        self.retry_limit = retry_limit
+        self.inflight = {}
+
+    async def enqueue(self, job):
+        await self.db.insert(job)
+
+    async def lease(self, worker_id):
+        job = await self.db.next_pending()
+        if job is None:
+            return None
+        self.inflight[job.id] = worker_id
+        await self.db.mark_running(job.id, worker_id)
+        return job
+
+    async def complete(self, job_id):
+        self.inflight.pop(job_id, None)
+        await self.db.mark_done(job_id)
+
+    async def fail(self, job_id, error):
+        self.inflight.pop(job_id, None)
+        job = await self.db.get(job_id)
+        if job.attempts >= self.retry_limit:
+            await self.db.mark_dead(job_id, error)
+        else:
+            await self.db.mark_pending(job_id, error)
+```
+
+Consider duplicate leases, transaction boundaries, cancellation, idempotency, lock contention, backoff, poison jobs, schema shape, metrics, traces, and how this should behave during deploys and database failover.
+
+---
+Review and improve the following Python service design. Focus on correctness, reliability, concurrency, API ergonomics, observability, and tests. Return concrete implementation guidance with code-level examples.
+
+```python
+class WorkQueue:
+    def __init__(self, db, workers, retry_limit=3):
+        self.db = db
+        self.workers = workers
+        self.retry_limit = retry_limit
+        self.inflight = {}
+
+    async def enqueue(self, job):
+        await self.db.insert(job)
+
+    async def lease(self, worker_id):
+        job = await self.db.next_pending()
+        if job is None:
+            return None
+        self.inflight[job.id] = worker_id
+        await self.db.mark_running(job.id, worker_id)
+        return job
+
+    async def complete(self, job_id):
+        self.inflight.pop(job_id, None)
+        await self.db.mark_done(job_id)
+
+    async def fail(self, job_id, error):
+        self.inflight.pop(job_id, None)
+        job = await self.db.get(job_id)
+        if job.attempts >= self.retry_limit:
+            await self.db.mark_dead(job_id, error)
+        else:
+            await self.db.mark_pending(job_id, error)
+```
+
+Consider duplicate leases, transaction boundaries, cancellation, idempotency, lock contention, backoff, poison jobs, schema shape, metrics, traces, and how this should behave during deploys and database failover.
+
+---
+Review and improve the following Python service design. Focus on correctness, reliability, concurrency, API ergonomics, observability, and tests. Return concrete implementation guidance with code-level examples.
+
+```python
+class WorkQueue:
+    def __init__(self, db, workers, retry_limit=3):
+        self.db = db
+        self.workers = workers
+        self.retry_limit = retry_limit
+        self.inflight = {}
+
+    async def enqueue(self, job):
+        await self.db.insert(job)
+
+    async def lease(self, worker_id):
+        job = await self.db.next_pending()
+        if job is None:
+            return None
+        self.inflight[job.id] = worker_id
+        await self.db.mark_running(job.id, worker_id)
+        return job
+
+    async def complete(self, job_id):
+        self.inflight.pop(job_id, None)
+        await self.db.mark_done(job_id)
+
+    async def fail(self, job_id, error):
+        self.inflight.pop(job_id, None)
+        job = await self.db.get(job_id)
+        if job.attempts >= self.retry_limit:
+            await self.db.mark_dead(job_id, error)
+        else:
+            await self.db.mark_pending(job_id, error)
+```
+
+Consider duplicate leases, transaction boundaries, cancellation, idempotency, lock contention, backoff, poison jobs, schema shape, metrics, traces, and how this should behave during deploys and database failover.
+
+
+Now answer the task in detail. Do not summarize the prompt; provide the requested analysis.
+ Additional constraint: be concrete, verify assumptions, and include tradeoffs. Additional constraint: be concrete, verify assumptions, and include tradeoffs. Additional constraint: be concrete, verify assumptions, and include tradeoffs. Additional constraint: be concrete, verify assumptions, and include tradeoffs. Additional constraint: be concrete, verify assumptions, and include tradeoffs. Additional constraint: be concrete, verify assumptions, and include tradeoffs. Additional constraint: be concrete, verify assumptions, and include tradeoffs. Additional constraint: be concrete, verify assumptions, and include tradeoffs. Additional constraint: be concrete, verify assumptions, and include tradeoffs. Additional constraint: be concrete, verify assumptions, and include tradeoffs. Additional constraint: be concrete, verify assumptions, and include tradeoffs.

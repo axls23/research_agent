@@ -1,0 +1,127 @@
+🔴🔴🔴🔴🔴🔴🔴🔴R🔴🔴🔴🔴🔴🔴🔴R🔴🔴🔴🔴🔴🔴🔴R🔴🔴🔴🔴🔴🔴🔴🔴R🔴🔴🔴🔴🔴🔴🔴🔴R🔴🔴🔴R🔴🔴🔴R🔴🔴🔴🔴🔴🔴🔴R🔴🔴🔴🔴🔴🔴R🔴🔴🔴R🔴🔴🔴🔴🔴R🔴🔴🔴🔴🔴R🔴🔴🔴🔴🔴R🔴🔴🔴🔴R🔴🔴🔴R🔴🔴🔴🔴R🔴TT🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴R🔴🔴🔴🔴🔴🔴🔴R🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴R🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴R🔴🔴🔴🔴🔴🔴🔴🔴🔴R🔴inesis🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴R🔴🔴🔴🔴🔴🔴🔴🔴R🔴🔴🔴🔴🔴🔴斤<|channel><|channel><|channel>🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴R🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴R🔴🔴🔴🔴🔴🔴🔴R🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴R🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴R🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴R🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴inesis🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴R🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴R🔴🔴🔴🔴🔴🔴100%
+<|channel>thought
+<channel|>This review identifies critical architectural flaws in the provided `WorkQueue` design, specifically regarding distributed systems reliability. The current implementation assumes a single-process memory space and lacks atomic guarantees, which will lead to "double-leasing" and lost jobs in a production environment.
+
+### 1. Critical Architectural Issues
+
+*   **Race Conditions (Double Leasing):** The `lease` method performs a `next_pending()` followed by a `mark_running()`. In a concurrent environment, two workers can fetch the same job before either marks it as running.
+*   **Memory Leak / State Inconsistency:** `self.inflight` is an in-memory dictionary. If the service restarts, the `inflight` state is lost, but the database still marks those jobs as "running." This creates "zombie jobs" that never complete or fail.
+*   **Lack of Atomicity:** There are no transaction boundaries. If `mark_running` fails after `next_pending` succeeds, the job remains in a "pending" state but might be invisible to other workers, or vice versa.
+*   **No Visibility/Observability:** There is no logging, tracing (OpenTelemetry), or metrics (Prometheus) to track queue depth, processing time, or failure rates.
+
+---
+
+### 2. Improved Implementation Guidance
+
+To solve these, we must move the "source of truth" entirely into the database using **Atomic Updates** (e.g., `UPDATE ... WHERE status='pending' LIMIT 1`).
+
+#### A. Schema Design (SQL Example)
+```sql
+CREATE TABLE jobs (
+    id UUID PRIMARY KEY,
+    payload JSONB,
+    status VARCHAR(20), -- 'pending', 'running', 'done', 'dead'
+    worker_id VARCHAR(50),
+    attempts INT DEFAULT 0,
+    next_run_at TIMESTAMP, -- For exponential backoff
+    last_error TEXT,
+    locked_at TIMESTAMP -- To detect "stuck" jobs
+);
+```
+
+#### B. Refactored Python Service
+This implementation uses a **"Select for Update"** or **"Atomic Update"** pattern to ensure only one worker can lease a job.
+
+```python
+import asyncio
+import logging
+import time
+from datetime import datetime, timedelta
+from typing import Optional, Dict
+from uuid import UUID
+
+# Assume a DB client that supports transactions
+class WorkQueue:
+    def __init__(self, db, retry_limit=3):
+        self.db = db
+        self.retry_limit = retry_limit
+        self.logger = logging.getLogger(__name__)
+
+    async def enqueue(self, job_id: UUID, payload: dict):
+        """Idempotent insertion of a job."""
+        try:
+            await self.db.execute(
+                "INSERT INTO jobs (id, payload, status, attempts) VALUES (?, ?, 'pending', 0)",
+                (job_id, payload)
+            )
+        except Exception as e:
+            self.logger.error(f"Failed to enqueue {job_id}: {e}")
+            raise
+
+    async def lease(self, worker_id: str) -> Optional[dict]:
+        """
+        Uses an atomic update to lease a job. 
+        Prevents double-leasing by checking status and updating in one query.
+        """
+        # SQL logic: UPDATE jobs SET status='running', worker_id=? 
+        # WHERE id = (SELECT id FROM jobs WHERE status='pending' 
+        # ORDER BY next_run_at ASC LIMIT 1 FOR UPDATE SKIP LOCKED)
+        # Note: 'SKIP LOCKED' is critical for high-concurrency DBs like Postgres/MySQL.
+        
+        job = await self.db.atomic_lease_query(worker_id)
+        if not job:
+            return None
+        
+        self.logger.info(f"Worker {worker_id} leased job {job['id']}")
+        return job
+
+    async def complete(self, job_id: UUID):
+        """Marks job as done. """
+        await self.db.execute(
+            "UPDATE jobs SET status='done' WHERE id=?", (job_id,)
+        )
+        self.logger.info(f"Job {job_id} completed successfully.")
+
+    async def fail(self, job_id: UUID, error: str):
+        """
+        Handles retries with Exponential Backoff.
+        If attempts >= limit, move to 'dead'.
+        """
+        job = await self.db.get_job(job_id)
+        new_attempts = job['attempts'] + 1
+        
+        if new_attempts >= self.retry_limit:
+            status = 'dead'
+            backoff = None
+        else:
+            status = 'pending'
+            # Exponential backoff: 2^attempts * 10 seconds
+            delay = (2 ** job['attempts']) * 10
+            backoff = datetime.utcnow() + timedelta(seconds=delay)
+
+        await self.db.execute(
+            "UPDATE jobs SET status=?, attempts=?, last_error=?, next_run_at=? WHERE id=?",
+            (status, new_attempts, error, backoff, job_id)
+        )
+        self.logger.warning(f"Job {job_id} failed. Status: {status}")
+```
+
+---
+
+### 3. Detailed Analysis of Requirements
+
+| Feature | Implementation Strategy | Tradeoff / Verification |
+| :--- | :--- | :--- |
+| **Duplicate Leases** | Use `FOR UPDATE SKIP LOCKED` (Postgres) or `UPDATE ... LIMIT 1` (MySQL). | **Tradeoff:** Slightly higher DB contention, but guarantees correctness. |
+| **Transaction Boundaries** | The `lease` operation must be a single atomic transaction. | **Verification:** Ensure `status` change and `worker_id` assignment happen together. |
+| **Cancellation** | Use `asyncio.shield` for critical DB writes to ensure they finish even if the worker task is cancelled. | **Tradeoff:** Complexity in handling partial failures. |
+| **Idempotency** | Use `job_id` (UUID) as a unique constraint in the DB. | **Verification:** `enqueue` should return success if job already exists. |
+| **Backoff** | Use `next_run_at` column with exponential delay ($2^n$). | **Tradeoff:** Requires a "polling" mechanism that skips jobs where `now < next_run_at`. |
+| **Poison Jobs** | If a job fails $X$ times, move to `dead` status. | **Verification:** Ensure `dead` jobs are never picked up by `lease`. |
+| **Observability** | Inject `trace_id` into the job payload. Log every state transition. | **Tradeoff:** Increased log volume. || **Database Failover** | Use a connection pool with heartbeat and automatic reconnection. | **Verification:** Ensure `lease` doesn't hang indefinitely on a dead node. |
+
+### 4. Testing Strategy
+1.  **Concurrency Test:** Spin up 50 `asyncio` tasks attempting to `lease` the same 10 jobs. Verify that exactly 10 jobs are leased and no job is leased twice.
+2.  **Persistence Test:** Start a lease, kill the process, restart, and verify the job is still marked as `running` (or use a "heartbeat" check to re-queue it).
+3.  **Backoff Test:** Enqueue a job, fail it 3 times, and verify `next_run_at` increases exponentially.
+4.  **Dead Letter Test:** Verify that a job exceeding `retry_limit` never returns a result from

@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 180" width="980" height="180">
+<style>text{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;fill:#202124}.title{font-weight:700;font-size:20px}.label{font-size:14px}.value{font-size:13px}</style>
+<rect width="100%" height="100%" fill="#fff"/>
+<text x="24" y="30" class="title">Parallel-3 MTP draft acceptance</text>
+<text x="24" y="76" class="label">coding MTP acceptance</text>
+<rect x="220" y="56" width="514" height="26" rx="4" fill="#6f5fb4"/>
+<text x="742" y="74" class="value">55.88 %</text>
+<text x="24" y="122" class="label">general MTP acceptance</text>
+<rect x="220" y="102" width="620" height="26" rx="4" fill="#6f5fb4"/>
+<text x="848" y="120" class="value">67.31 %</text>
+</svg>

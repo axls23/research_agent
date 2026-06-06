@@ -6,12 +6,12 @@ import re
 from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 from urllib import error, request
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 
 from core.graph import run_research_pipeline
@@ -31,6 +31,18 @@ app.add_middleware(
 
 class ChatRequest(BaseModel):
     message: str
+    use_harness: bool = True
+    rigor_level: Literal["exploratory", "prisma", "cochrane"] = "prisma"
+    mode: Literal["agentic", "default", "langgraph"] = "agentic"
+    research_goals: List[str] = Field(default_factory=list)
+    allow_auto_override: bool = True
+
+
+class ChatSource(BaseModel):
+    title: str
+    paper_id: Optional[str] = None
+    year: Optional[int] = None
+    source_url: Optional[str] = None
 
 class AgentStep(BaseModel):
     agent: str
@@ -39,8 +51,9 @@ class AgentStep(BaseModel):
 
 class ChatResponse(BaseModel):
     content: str
-    citations: Optional[List[str]] = []
-    agentSteps: Optional[List[AgentStep]] = []
+    citations: List[str] = Field(default_factory=list)
+    sources: List[ChatSource] = Field(default_factory=list)
+    agentSteps: List[AgentStep] = Field(default_factory=list)
 
 
 _NODE_TO_STAGE = {
@@ -127,14 +140,32 @@ def _build_chat_payload(result_state: Dict[str, Any]) -> Dict[str, Any]:
     final_text = ""
     if "draft_sections" in result_state and result_state["draft_sections"]:
         final_text = "\n\n".join(result_state["draft_sections"].values())
+    elif result_state.get("analysis_results"):
+        summaries = [
+            r.get("result_summary", "")
+            for r in result_state.get("analysis_results", [])
+            if isinstance(r, dict) and r.get("result_summary")
+        ]
+        if summaries:
+            final_text = "\n\n".join(summaries[:2])
     else:
         final_text = "I have completed analyzing the research related to your query."
 
     # Extract citations
     citations: List[str] = []
+    sources: List[Dict[str, Any]] = []
     if "papers" in result_state:
         for p in result_state["papers"][:5]:
             citations.append(p.get("title", "Unknown Source"))
+        for p in result_state["papers"][:8]:
+            sources.append(
+                {
+                    "title": p.get("title", "Unknown Source"),
+                    "paper_id": p.get("paper_id"),
+                    "year": p.get("year"),
+                    "source_url": p.get("source_url"),
+                }
+            )
 
     # Extract agent steps from audit_log
     agent_steps: List[Dict[str, str]] = []
@@ -158,7 +189,64 @@ def _build_chat_payload(result_state: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "content": final_text,
         "citations": citations,
+        "sources": sources,
         "agentSteps": agent_steps,
+    }
+
+
+def _extract_topic_from_chat(message: str) -> str:
+    """Derive a clean research topic string from a free-form chat message."""
+    text = " ".join((message or "").strip().split())
+    if not text:
+        return "General Research Topic"
+
+    explicit = re.search(r"(?:research\s+topic|topic)\s*[:=-]\s*(.+)", text, re.IGNORECASE)
+    if explicit:
+        text = explicit.group(1).strip()
+
+    text = re.sub(
+        r"^(can\s+you|could\s+you|please|i\s+want\s+to|i\s+need\s+to|help\s+me)\s+",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(r"^(analy[sz]e|research|review|summari[sz]e|find\s+papers\s+on|find\s+literature\s+on)\s+", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"[?.!]+$", "", text).strip()
+
+    if len(text) > 180:
+        text = text[:180].rsplit(" ", 1)[0]
+
+    return text or "General Research Topic"
+
+
+def _build_pipeline_kwargs(req: ChatRequest) -> Dict[str, Any]:
+    """Translate a chat request into a run_research_pipeline invocation."""
+    use_harness = bool(req.use_harness)
+    resolved_rigor = req.rigor_level if use_harness else "exploratory"
+    topic = _extract_topic_from_chat(req.message)
+    goals = list(req.research_goals or [])
+    if not goals:
+        goals = [
+            f"Summarize key methods and evidence for: {topic}",
+            f"Identify major limitations and open challenges for: {topic}",
+        ]
+        # Preserve full user phrasing when it carries extra intent.
+        if req.message.strip() and req.message.strip() != topic:
+            goals.insert(0, req.message.strip())
+
+    return {
+        "project_name": (
+            f"HarnessChat_{uuid.uuid4().hex[:8]}"
+            if use_harness
+            else f"ChatSession_{uuid.uuid4().hex[:8]}"
+        ),
+        "research_topic": topic,
+        "research_goals": goals,
+        "rigor_level": resolved_rigor,
+        "interactive": False,
+        "allow_auto_override": bool(req.allow_auto_override),
+        "mode": req.mode if use_harness else "agentic",
+        "agentic_model": _get_agentic_ollama_model(),
     }
 
 
@@ -458,7 +546,11 @@ async def backend_monitor(lines: int = 120):
 async def chat_endpoint_get():
     return {
         "status": "ok",
-        "message": "Use POST /api/chat with JSON body: {\"message\": \"...\"}",
+        "message": (
+            "Use POST /api/chat or /api/chat/stream with JSON body: "
+            "{\"message\": \"...\", \"use_harness\": true, "
+            "\"rigor_level\": \"prisma\", \"mode\": \"default\"}"
+        ),
     }
 
 
@@ -468,12 +560,22 @@ async def chat_stream_endpoint(req: ChatRequest):
         return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
     async def _event_stream():
+        pipeline_kwargs = _build_pipeline_kwargs(req)
+        mode_tag = (
+            f"harness/{pipeline_kwargs['rigor_level']}"
+            if req.use_harness
+            else "chat/exploratory"
+        )
+
         yield _sse(
             "status",
             {
                 "phase": "started",
                 "stage": "planner",
-                "message": "Planning deep-agent workflow for your request",
+                "message": (
+                    f"Planning workflow ({mode_tag}) for topic: "
+                    f"{pipeline_kwargs.get('research_topic', 'N/A')}"
+                ),
             },
         )
 
@@ -491,14 +593,7 @@ async def chat_stream_endpoint(req: ChatRequest):
         idle_loops = 0
 
         task = asyncio.create_task(
-            run_research_pipeline(
-                project_name=f"ChatSession_{uuid.uuid4().hex[:8]}",
-                research_topic=req.message,
-                research_goals=[],
-                rigor_level="exploratory",
-                mode="agentic",
-                agentic_model=_get_agentic_ollama_model(),
-            )
+            run_research_pipeline(**pipeline_kwargs)
         )
 
         while not task.done():
@@ -573,6 +668,7 @@ async def chat_stream_endpoint(req: ChatRequest):
             "meta",
             {
                 "citations": payload.get("citations", []),
+                "sources": payload.get("sources", []),
                 "agentSteps": payload.get("agentSteps", []),
             },
         )
@@ -588,16 +684,7 @@ async def chat_stream_endpoint(req: ChatRequest):
 @app.post("/api/chat", response_model=ChatResponse)
 async def chat_endpoint(req: ChatRequest):
     try:
-        # Run the agentic pipeline
-        # Mode is 'agentic', rigor is exploratory for quick chat, goals are empty
-        result_state = await run_research_pipeline(
-            project_name=f"ChatSession_{uuid.uuid4().hex[:8]}",
-            research_topic=req.message,
-            research_goals=[],
-            rigor_level="exploratory",
-            mode="agentic",
-            agentic_model=_get_agentic_ollama_model(),
-        )
+        result_state = await run_research_pipeline(**_build_pipeline_kwargs(req))
 
         payload = _build_chat_payload(result_state)
         return ChatResponse(**payload)

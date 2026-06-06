@@ -12,8 +12,10 @@ import asyncio
 import logging
 import argparse
 import json
+import re
 from pathlib import Path
 from urllib import error, request
+from typing import List, Tuple
 
 # Add project to Python path
 project_root = Path(__file__).parent
@@ -30,6 +32,13 @@ logging.basicConfig(
 logger = logging.getLogger("run_research_agent")
 
 from core.graph import run_research_pipeline
+
+
+_DEFAULT_TOPIC = "Quantum Machine Learning algorithms for simulating molecular dynamics"
+_DEFAULT_GOALS = [
+    "Analyze the computational speedup of quantum algorithms over classical counterparts",
+    "Identify leading noise-mitigation strategies in near-term quantum hardware (NISQ)",
+]
 
 
 def _normalize_ollama_model(model: str) -> str:
@@ -85,6 +94,46 @@ def check_requirements(selected_model: str):
         return False
 
 
+def _normalize_topic(raw: str) -> str:
+    text = " ".join((raw or "").strip().split())
+    if not text:
+        return ""
+
+    explicit = re.search(r"(?:research\s+topic|topic)\s*[:=-]\s*(.+)", text, re.IGNORECASE)
+    if explicit:
+        text = explicit.group(1).strip()
+
+    text = re.sub(
+        r"^(can\s+you|could\s+you|please|i\s+want\s+to|i\s+need\s+to|help\s+me)\s+",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(r"[?.!]+$", "", text).strip()
+    return text
+
+
+def _resolve_research_inputs(args: argparse.Namespace) -> Tuple[str, str, List[str]]:
+    env_topic = os.getenv("RESEARCH_TOPIC", "")
+    topic_candidate = args.topic or env_topic
+    topic = _normalize_topic(topic_candidate)
+
+    goals: List[str] = [g.strip() for g in (args.goal or []) if g and g.strip()]
+
+    if not topic:
+        return "Quantum ML Analysis", _DEFAULT_TOPIC, list(_DEFAULT_GOALS)
+
+    project_name = args.project_name.strip() if (args.project_name or "").strip() else "Research Analysis"
+
+    if not goals:
+        goals = [
+            f"Summarize key methods and evidence for: {topic}",
+            f"Identify major limitations and open challenges for: {topic}",
+        ]
+
+    return project_name, topic, goals
+
+
 async def main_async(args):
     """Async execution of the pipeline"""
     requested_mode = (args.mode or "agentic").lower()
@@ -97,14 +146,7 @@ async def main_async(args):
     logger.info(f"Using Rigor Level: {args.rigor}")
     logger.info("Using Model: %s", resolved_model)
 
-    # In a real use case, these would be passed via CLI args as well,
-    # but for a simple demo test, we can use placeholder topics.
-    project_name = "Quantum ML Analysis"
-    topic = "Quantum Machine Learning algorithms for simulating molecular dynamics"
-    goals = [
-        "Analyze the computational speedup of quantum algorithms over classical counterparts",
-        "Identify leading noise-mitigation strategies in near-term quantum hardware (NISQ)",
-    ]
+    project_name, topic, goals = _resolve_research_inputs(args)
 
     logger.info(f"Running research pipeline on: '{topic}'")
 
@@ -151,6 +193,27 @@ def main():
         type=str,
         default=os.getenv("OLLAMA_MODEL", "qwen2.5:3b"),
         help="Ollama model name or fully qualified ollama:<model> (default: qwen2.5:3b).",
+    )
+    parser.add_argument(
+        "--project-name",
+        type=str,
+        default=os.getenv("RESEARCH_PROJECT_NAME", "Research Analysis"),
+        help="Project name used in audit artifacts.",
+    )
+    parser.add_argument(
+        "--topic",
+        type=str,
+        default=os.getenv("RESEARCH_TOPIC", ""),
+        help=(
+            "Research topic. If omitted, falls back to demo topic. "
+            "You can also pass natural chat text and the topic will be normalized."
+        ),
+    )
+    parser.add_argument(
+        "--goal",
+        action="append",
+        default=[],
+        help="Research goal. Repeat --goal for multiple goals.",
     )
     args = parser.parse_args()
 

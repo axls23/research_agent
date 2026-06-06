@@ -12,13 +12,61 @@ backtrack to literature_review if evidence gaps are found.
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any, Dict
 
+from core.llm_provider import OllamaProvider
 from core.state import ResearchState, append_audit
 
 logger = logging.getLogger(__name__)
 
 MAX_BACKTRACKS = 2  # Cap loops to prevent infinite cycles
+
+
+def _resolve_final_pass_llm(cfgr: Dict[str, Any]) -> OllamaProvider:
+    """Always use a local Ollama model for the final synthesis pass."""
+    configured = cfgr.get("final_pass_llm") or cfgr.get("llm_deep") or cfgr.get("llm")
+    if isinstance(configured, OllamaProvider):
+        return configured
+
+    return OllamaProvider(
+        model=os.getenv("OLLAMA_MODEL", "qwen2.5:3b"),
+        base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
+    )
+
+
+def _build_data_processing_context(state: ResearchState, max_chunks: int = 8) -> str:
+    """Summarise the processed evidence so the final pass stays grounded."""
+    papers = list(state.get("papers", []))
+    chunks = list(state.get("chunks", []))
+
+    included_papers = [p for p in papers if p.get("included", True)]
+    paper_lines = []
+    for paper in included_papers[:8]:
+        title = paper.get("title", "Untitled paper")
+        year = paper.get("year")
+        paper_id = paper.get("paper_id", "unknown")
+        annotations = paper.get("annotations") or {}
+        method = annotations.get("method", "unknown") if isinstance(annotations, dict) else "unknown"
+        paper_lines.append(f"- {paper_id}: {title} ({year or 'n.d.'}) [{method}]")
+
+    chunk_lines = []
+    for chunk in chunks[:max_chunks]:
+        text = " ".join(str(chunk.get("text", "")).split())
+        if len(text) > 260:
+            text = text[:260].rsplit(" ", 1)[0] + "..."
+        chunk_lines.append(
+            f"- {chunk.get('paper_id', 'unknown')} | {chunk.get('token_count', 0)} tokens | {text}"
+        )
+
+    return (
+        f"Paper counts: screened={state.get('papers_screened', 0)}, "
+        f"included={state.get('papers_included', len(included_papers))}, "
+        f"chunks={len(chunks)}, total_tokens={state.get('total_tokens_extracted', 0)}, "
+        f"dual_extraction={state.get('dual_extraction_performed', False)}\n\n"
+        f"Included papers:\n{chr(10).join(paper_lines) if paper_lines else '- none'}\n\n"
+        f"Representative chunks:\n{chr(10).join(chunk_lines) if chunk_lines else '- none'}"
+    )
 
 
 async def writing_node(
@@ -35,7 +83,7 @@ async def writing_node(
     """
     config = config or {}
     cfgr = config.get("configurable", {})
-    llm = cfgr.get("llm_deep") or cfgr.get("llm")  # prefer deep tier
+    llm = _resolve_final_pass_llm(cfgr)
 
     topic = state.get("research_topic", "")
     results = state.get("analysis_results", [])
@@ -43,6 +91,7 @@ async def writing_node(
     draft_sections: Dict[str, str] = dict(state.get("draft_sections", {}))
     outline = state.get("outline")
     backtrack_count = state.get("backtrack_count", 0)
+    data_processing_context = _build_data_processing_context(state)
 
     if not llm:
         # Stub output without LLM
@@ -68,13 +117,18 @@ async def writing_node(
     # ---- Generate outline ----
     system_outline = (
         "You are an academic writing assistant. Generate a detailed paper "
-        "outline for a systematic review on the given topic. Include main "
-        "sections and subsections. Format as markdown headers."
+        "outline for a systematic review on the given topic. Ground the "
+        "outline in the processed evidence and extracted chunk context. "
+        "Include main sections and subsections. Format as markdown headers."
     )
     analysis_summary = "\n".join(r.get("result_summary", "") for r in results)[:3000]
 
     outline = await llm.generate(
-        f"Topic: {topic}\n\nAnalysis findings:\n{analysis_summary}",
+        (
+            f"Topic: {topic}\n\n"
+            f"Data processing context:\n{data_processing_context}\n\n"
+            f"Analysis findings:\n{analysis_summary}"
+        ),
         system_prompt=system_outline,
         temperature=0.5,
         max_tokens=2048,
@@ -85,6 +139,7 @@ async def writing_node(
     lit_review = await llm.generate(
         (
             f"Topic: {topic}\n\n"
+            f"Data processing context:\n{data_processing_context}\n\n"
             f"Key concepts and methods: {', '.join(entity_texts)}\n\n"
             f"Analysis: {analysis_summary[:2000]}\n\n"
             "Write a coherent literature review section (500-800 words) "
@@ -101,6 +156,7 @@ async def writing_node(
         (
             f"Topic: {topic}\n"
             f"Number of papers reviewed: {state.get('papers_included', 0)}\n"
+            f"Data processing context:\n{data_processing_context}\n\n"
             f"Key themes: {', '.join(entity_texts[:10])}\n\n"
             "Write a concise introduction (200-300 words) for this systematic "
             "review. Include the research question, significance, and scope."
@@ -110,6 +166,27 @@ async def writing_node(
         max_tokens=1024,
     )
     draft_sections["introduction"] = intro
+
+    # ---- Final synthesis pass (local Ollama) ----
+    final_pass = await llm.generate(
+        (
+            f"Topic: {topic}\n"
+            f"Research goals: {state.get('research_goals', [])}\n\n"
+            f"Data processing context:\n{data_processing_context}\n\n"
+            f"Analysis summary:\n{analysis_summary}\n\n"
+            "Write the final synthesis pass using only the extracted evidence "
+            "and processed chunk context above. Summarise the main findings, "
+            "limitations, and the most defensible next steps. Keep the tone "
+            "academic and grounded."
+        ),
+        system_prompt=(
+            "You are a local Ollama synthesis model. Finalise the review using "
+            "the provided data-processing layer context and never invent evidence."
+        ),
+        temperature=0.4,
+        max_tokens=1536,
+    )
+    draft_sections["final_pass"] = final_pass
 
     # ---- Evidence Gap Detection (backtracking) ----
     needs_more = False

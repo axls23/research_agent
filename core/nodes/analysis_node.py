@@ -31,6 +31,7 @@ async def analysis_node(
     llm = cfgr.get("llm_deep") or cfgr.get("llm")  # prefer deep tier
 
     entities = state.get("knowledge_entities", [])
+    clusters = state.get("isomorphic_clusters", [])
     papers = state.get("papers", [])
     results = list(state.get("analysis_results", []))
 
@@ -47,13 +48,25 @@ async def analysis_node(
             "result_summary": (
                 f"{len(included)} papers included, "
                 f"{len(entities)} entities extracted, "
+                f"{len(clusters)} isomorphic clusters detected, "
                 f"distribution: {topic_dist}"
             ),
             "figures": [],
-            "tables": [{"entity_distribution": topic_dist}],
+            "tables": [
+                {"entity_distribution": topic_dist},
+                {
+                    "cluster_summary": {
+                        "count": len(clusters),
+                        "top_principles": [
+                            c.get("shared_principle", "") for c in clusters[:5]
+                        ],
+                    }
+                },
+            ],
             "statistical_output": {
                 "papers_included": len(included),
                 "entity_count": len(entities),
+                "cluster_count": len(clusters),
                 "topic_distribution": topic_dist,
             },
         }
@@ -94,6 +107,8 @@ async def analysis_node(
         prompt = (
             f"Research topic: {state.get('research_topic', '')}\n"
             f"Papers included: {len(included)}\n\n"
+            f"Isomorphic clusters: {len(clusters)}\n"
+            f"Top cluster principles: {[c.get('shared_principle', '') for c in clusters[:5]]}\n\n"
             f"=== Extracted Knowledge ===\n{graph_context}\n"
         )
 
@@ -139,7 +154,7 @@ async def analysis_node(
 
 
 # ---------------------------------------------------------------------------
-# GraphRAG Retrieval (Qdrant -> Neo4j)
+# GraphRAG Retrieval (Neo4j Vector Index)
 # ---------------------------------------------------------------------------
 
 

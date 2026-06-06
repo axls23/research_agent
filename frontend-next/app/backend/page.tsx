@@ -4,6 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import { motion } from "framer-motion";
 import { Activity, Bot, Cpu, RefreshCcw, Server } from "lucide-react";
 
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
+
 type MonitorResponse = {
   timestamp: string;
   backend: { up: boolean; pid: number; cwd: string };
@@ -124,7 +126,7 @@ export default function BackendMonitorPage() {
 
   const fetchData = async () => {
     try {
-      const resp = await fetch("http://localhost:8000/api/backend/monitor?lines=160", {
+      const resp = await fetch(`${API_BASE_URL}/api/backend/monitor?lines=160`, {
         cache: "no-store",
       });
       if (!resp.ok) {
@@ -198,7 +200,7 @@ export default function BackendMonitorPage() {
 
         {error && (
           <div className="glass rounded-2xl p-6 text-sm" style={{ color: "#fca5a5" }}>
-            Failed to fetch monitor data: {error}. Ensure backend API is running at http://localhost:8000.
+            Failed to fetch monitor data: {error}. Ensure backend API is running at {API_BASE_URL}.
           </div>
         )}
 

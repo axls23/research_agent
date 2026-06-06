@@ -1,0 +1,94 @@
+{
+  "source_model": "google/gemma-4-12B-it-assistant",
+  "source_revision": "723932f88886ab714522468b94f9c7ee48d8c9a8",
+  "requested_repo": "atx/gemma4-12b-mtp-assistant",
+  "uploaded_repo": "sjakek/gemma4-12b-mtp-assistant",
+  "requested_repo_status": "blocked: authenticated token has no atx namespace write rights",
+  "gguf_architecture": "gemma4-assistant",
+  "llama_cpp_branch": {
+    "repo": "https://github.com/am17an/llama.cpp",
+    "branch": "gemma4-mtp",
+    "commit": "b8e703e",
+    "local_converter_patch": [
+      "Register Gemma4UnifiedAssistantForCausalLM in conversion/__init__.py",
+      "Register Gemma4UnifiedAssistantForCausalLM on Gemma4AssistantModel in conversion/gemma.py"
+    ]
+  },
+  "outputs": [
+    {
+      "filename": "gemma-4-12B-it-assistant-BF16.gguf",
+      "file_type": "MOSTLY_BF16",
+      "bytes": 861520128,
+      "sha256": "be2ff6cf6dc9f4d753be846efb990606a5fec1b9c758c7f200112d2431f5e248"
+    },
+    {
+      "filename": "gemma-4-12B-it-assistant-Q8_0.gguf",
+      "file_type": "MOSTLY_Q8_0",
+      "bytes": 465109248,
+      "sha256": "cb9b46d9ff820b2b9b0d53cc911a2bc27eb2faf84700284047244d8f28883794"
+    }
+  ],
+  "metadata": {
+    "context_length": 131072,
+    "assistant_hidden_size": 1024,
+    "target_hidden_size": 3840,
+    "num_hidden_layers": 4,
+    "num_attention_heads": 16,
+    "head_count_kv": [8, 8, 8, 1],
+    "shared_kv_layers": 4,
+    "nextn_predict_layers": 4,
+    "sliding_window_pattern": [true, true, true, false],
+    "rope_dimension_count": 512,
+    "rope_dimension_count_swa": 256,
+    "required_tensors": [
+      "rope_freqs.weight",
+      "nextn.pre_projection.weight",
+      "nextn.post_projection.weight"
+    ]
+  },
+  "runtime_validation": {
+    "status": "pass",
+    "target_model": "gemma-4-12b-it-UD-Q6_K_XL.gguf",
+    "speculative_type": "draft-mtp",
+    "serving_shape": {
+      "ctx_size": 131072,
+      "batch_size": 4096,
+      "ubatch_size": 512,
+      "flash_attn": true,
+      "draft_kv": "q8_0/q8_0"
+    },
+    "checks": [
+      {
+        "name": "gguf_audit",
+        "result": "pass"
+      },
+      {
+        "name": "bf16_mtp_generation",
+        "result": "pass",
+        "draft_tokens": 6,
+        "accepted_tokens": 6,
+        "log": "logs/completion-bf16-mtp.json"
+      },
+      {
+        "name": "q8_0_mtp_generation",
+        "result": "pass",
+        "draft_tokens": 6,
+        "accepted_tokens": 6,
+        "log": "logs/completion-q8-mtp.json"
+      },
+      {
+        "name": "long_context_smoke",
+        "result": "pass",
+        "prompt_tokens": 126009,
+        "predicted_tokens": 8,
+        "truncated": false,
+        "log": "logs/completion-q8-mtp-long-context-summary.json"
+      },
+      {
+        "name": "openai_chat_completion",
+        "result": "pass",
+        "log": "logs/openai-chat-final-q8-canonical.json"
+      }
+    ]
+  }
+}

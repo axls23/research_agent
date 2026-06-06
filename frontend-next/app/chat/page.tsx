@@ -19,6 +19,9 @@ import {
 } from "lucide-react";
 import Badge from "@/components/ui/Badge";
 
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
+const CHAT_SESSION_STORAGE_KEY = "research-agent-chat-session-v1";
+
 /* ────────────────── Types ────────────────── */
 interface Message {
     id: string;
@@ -36,13 +39,21 @@ interface AgentStep {
 
 interface SourceItem {
     title: string;
-    page: number;
-    score: number;
-    excerpt: string;
+    page?: number;
+    score?: number;
+    excerpt?: string;
+    year?: number;
+    sourceUrl?: string;
 }
 
 interface StreamMetaPayload {
     citations?: string[];
+    sources?: Array<{
+        title?: string;
+        paper_id?: string;
+        year?: number;
+        source_url?: string;
+    }>;
     agentSteps?: AgentStep[];
 }
 
@@ -50,6 +61,13 @@ interface StreamStatusPayload {
     phase?: string;
     stage?: string;
     message?: string;
+}
+
+interface PersistedChatSession {
+    messages: Message[];
+    sources: SourceItem[];
+    useHarness: boolean;
+    input: string;
 }
 
 /* ────────────────── Mock Data ────────────────── */
@@ -105,15 +123,66 @@ export default function ChatPage() {
     ]);
     const [input, setInput] = useState("");
     const [isTyping, setIsTyping] = useState(false);
+    const [useHarness, setUseHarness] = useState(true);
     const [expandedSteps, setExpandedSteps] = useState<string | null>(null);
     const [sources, setSources] = useState<SourceItem[]>([]);
+    const [sessionHydrated, setSessionHydrated] = useState(false);
     const bottomRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
         bottomRef.current?.scrollIntoView({ behavior: "smooth" });
     }, [messages, isTyping]);
 
+    useEffect(() => {
+        try {
+            const raw = window.localStorage.getItem(CHAT_SESSION_STORAGE_KEY);
+            if (!raw) {
+                setSessionHydrated(true);
+                return;
+            }
+
+            const parsed = JSON.parse(raw) as Partial<PersistedChatSession>;
+
+            if (Array.isArray(parsed.messages) && parsed.messages.length > 0) {
+                setMessages(parsed.messages);
+            }
+            if (Array.isArray(parsed.sources)) {
+                setSources(parsed.sources);
+            }
+            if (typeof parsed.useHarness === "boolean") {
+                setUseHarness(parsed.useHarness);
+            }
+            if (typeof parsed.input === "string") {
+                setInput(parsed.input);
+            }
+        } catch (error) {
+            console.warn("Failed to restore chat session", error);
+        } finally {
+            // Streaming requests do not survive route changes, so always reset typing on restore.
+            setIsTyping(false);
+            setSessionHydrated(true);
+        }
+    }, []);
+
+    useEffect(() => {
+        if (!sessionHydrated) return;
+
+        const payload: PersistedChatSession = {
+            messages: messages.slice(-50),
+            sources: sources.slice(0, 20),
+            useHarness,
+            input,
+        };
+
+        try {
+            window.localStorage.setItem(CHAT_SESSION_STORAGE_KEY, JSON.stringify(payload));
+        } catch (error) {
+            console.warn("Failed to persist chat session", error);
+        }
+    }, [sessionHydrated, messages, sources, useHarness, input]);
+
     const sendMessage = async () => {
+        if (!sessionHydrated) return;
         if (!input.trim()) return;
         const currentInput = input;
         const userMsg: Message = { id: crypto.randomUUID(), role: "user", content: currentInput };
@@ -158,6 +227,12 @@ export default function ChatPage() {
         };
 
         const patchAssistantMeta = (meta: StreamMetaPayload) => {
+            const resolvedSources: SourceItem[] = (meta.sources || []).map((s) => ({
+                title: s.title || "Unknown Source",
+                year: s.year,
+                sourceUrl: s.source_url,
+            }));
+
             setMessages((prev) =>
                 prev.map((m) =>
                     m.id === assistantId
@@ -169,13 +244,25 @@ export default function ChatPage() {
                         : m,
                 ),
             );
+
+            if (resolvedSources.length > 0) {
+                setSources(resolvedSources);
+            } else if (meta.citations && meta.citations.length > 0) {
+                setSources(meta.citations.map((title) => ({ title })));
+            }
         };
 
         try {
-            const response = await fetch("http://localhost:8000/api/chat/stream", {
+            const response = await fetch(`${API_BASE_URL}/api/chat/stream`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ message: currentInput })
+                body: JSON.stringify({
+                    message: currentInput,
+                    use_harness: useHarness,
+                    rigor_level: useHarness ? "prisma" : "exploratory",
+                    mode: useHarness ? "default" : "agentic",
+                    allow_auto_override: useHarness,
+                })
             });
 
             if (!response.ok || !response.body) {
@@ -216,7 +303,6 @@ export default function ChatPage() {
                     appendAssistantStatus(parsed ?? {});
                 } else if (eventType === "meta") {
                     patchAssistantMeta(parsed ?? {});
-                    setSources(MOCK_SOURCES);
                 } else if (eventType === "error") {
                     appendAssistantDelta(`\n\nError: ${parsed?.message ?? "Unknown error"}`);
                 }
@@ -251,7 +337,7 @@ export default function ChatPage() {
                             ...m,
                             content:
                                 m.content ||
-                                "Sorry, I could not reach the backend API. Please make sure the server is running on port 8000.",
+                                `Sorry, I could not reach the backend API at ${API_BASE_URL}. Please make sure it is running.`,
                             citations: m.citations ?? [],
                             agentSteps: m.agentSteps ?? [],
                         }
@@ -334,6 +420,16 @@ export default function ChatPage() {
                         <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Research Assistant</p>
                         <p className="text-xs" style={{ color: "var(--text-muted)" }}>Agentic RAG · {MOCK_DOCS.length} documents indexed</p>
                     </div>
+                    <div
+                        className="ml-2 px-2 py-1 rounded-md text-[10px]"
+                        style={{
+                            background: useHarness ? "rgba(34, 211, 238, 0.12)" : "rgba(99, 102, 241, 0.12)",
+                            color: useHarness ? "var(--accent-cyan)" : "#a5b4fc",
+                            border: "1px solid rgba(255,255,255,0.12)",
+                        }}
+                    >
+                        {useHarness ? "Harness Mode" : "Chat Mode"}
+                    </div>
                     <div className="ml-auto flex items-center gap-2">
                         <span className="w-2 h-2 rounded-full" style={{ background: "#4ade80" }} />
                         <span className="text-xs" style={{ color: "var(--text-muted)" }}>Online</span>
@@ -343,7 +439,18 @@ export default function ChatPage() {
                 {/* Messages */}
                 <div className="flex-1 overflow-y-auto px-6 py-6 space-y-6">
                     <AnimatePresence>
-                        {messages.map((msg) => (
+                        {!sessionHydrated && (
+                            <motion.div
+                                initial={{ opacity: 0, y: 8 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                className="text-xs"
+                                style={{ color: "var(--text-muted)" }}
+                            >
+                                Restoring previous chat session...
+                            </motion.div>
+                        )}
+
+                        {sessionHydrated && messages.map((msg) => (
                             <motion.div
                                 key={msg.id}
                                 initial={{ opacity: 0, y: 16 }}
@@ -482,6 +589,18 @@ export default function ChatPage() {
                     className="px-6 py-4 border-t flex-shrink-0"
                     style={{ borderColor: "var(--border-card)", background: "var(--bg-secondary)" }}
                 >
+                    <div className="mb-2 flex items-center gap-2 text-xs" style={{ color: "var(--text-muted)" }}>
+                        <input
+                            id="harness-toggle"
+                            type="checkbox"
+                            checked={useHarness}
+                            onChange={(e) => setUseHarness(e.target.checked)}
+                            className="accent-cyan-400"
+                        />
+                        <label htmlFor="harness-toggle" className="cursor-pointer">
+                            Run through research harness (strict PRISMA path)
+                        </label>
+                    </div>
                     <div
                         className="flex items-end gap-3 rounded-2xl p-3"
                         style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.1)" }}
@@ -502,7 +621,7 @@ export default function ChatPage() {
                         />
                         <button
                             onClick={sendMessage}
-                            disabled={!input.trim() || isTyping}
+                            disabled={!sessionHydrated || !input.trim() || isTyping}
                             className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 transition-all duration-200 hover:brightness-110 disabled:opacity-40"
                             style={{ background: "linear-gradient(135deg, #6366f1, #22d3ee)" }}
                         >
@@ -545,31 +664,57 @@ export default function ChatPage() {
                                         <span className="text-xs font-semibold leading-snug" style={{ color: "var(--text-primary)" }}>
                                             {src.title}
                                         </span>
-                                        <span className="text-[10px] flex-shrink-0 px-1.5 py-0.5 rounded" style={{ background: "rgba(74,222,128,0.1)", color: "#4ade80" }}>
-                                            p.{src.page}
-                                        </span>
+                                        {src.page !== undefined && (
+                                            <span className="text-[10px] flex-shrink-0 px-1.5 py-0.5 rounded" style={{ background: "rgba(74,222,128,0.1)", color: "#4ade80" }}>
+                                                p.{src.page}
+                                            </span>
+                                        )}
                                     </div>
+
+                                    {src.year !== undefined && (
+                                        <p className="text-[10px]" style={{ color: "var(--text-muted)" }}>
+                                            Year: {src.year}
+                                        </p>
+                                    )}
 
                                     {/* Confidence bar */}
                                     <div>
-                                        <div className="flex justify-between mb-1">
-                                            <span className="text-[10px]" style={{ color: "var(--text-muted)" }}>Relevance</span>
-                                            <span className="text-[10px]" style={{ color: "var(--accent-cyan)" }}>{Math.round(src.score * 100)}%</span>
-                                        </div>
-                                        <div className="h-1 rounded-full overflow-hidden" style={{ background: "rgba(255,255,255,0.06)" }}>
-                                            <motion.div
-                                                className="h-full rounded-full"
-                                                style={{ background: "linear-gradient(90deg, #6366f1, #22d3ee)" }}
-                                                initial={{ width: 0 }}
-                                                animate={{ width: `${src.score * 100}%` }}
-                                                transition={{ duration: 0.8, delay: i * 0.1 }}
-                                            />
-                                        </div>
+                                        {src.score !== undefined && (
+                                            <>
+                                                <div className="flex justify-between mb-1">
+                                                    <span className="text-[10px]" style={{ color: "var(--text-muted)" }}>Relevance</span>
+                                                    <span className="text-[10px]" style={{ color: "var(--accent-cyan)" }}>{Math.round(src.score * 100)}%</span>
+                                                </div>
+                                                <div className="h-1 rounded-full overflow-hidden" style={{ background: "rgba(255,255,255,0.06)" }}>
+                                                    <motion.div
+                                                        className="h-full rounded-full"
+                                                        style={{ background: "linear-gradient(90deg, #6366f1, #22d3ee)" }}
+                                                        initial={{ width: 0 }}
+                                                        animate={{ width: `${src.score * 100}%` }}
+                                                        transition={{ duration: 0.8, delay: i * 0.1 }}
+                                                    />
+                                                </div>
+                                            </>
+                                        )}
                                     </div>
 
-                                    <p className="text-[11px] leading-relaxed line-clamp-3" style={{ color: "var(--text-secondary)" }}>
-                                        "{src.excerpt}"
-                                    </p>
+                                    {src.excerpt && (
+                                        <p className="text-[11px] leading-relaxed line-clamp-3" style={{ color: "var(--text-secondary)" }}>
+                                            "{src.excerpt}"
+                                        </p>
+                                    )}
+
+                                    {src.sourceUrl && (
+                                        <a
+                                            href={src.sourceUrl}
+                                            target="_blank"
+                                            rel="noreferrer"
+                                            className="text-[11px] underline"
+                                            style={{ color: "var(--accent-cyan)" }}
+                                        >
+                                            Open source
+                                        </a>
+                                    )}
                                 </motion.div>
                             ))
                         )}

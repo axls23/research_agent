@@ -7,7 +7,7 @@ Pipeline:
   1. Tier 1 (GLiNER) — zero-shot NER for grounded entity spans (local CPU)
   2. Tier 2 (LLM + Pydantic) — structured PRISMA extraction via Groq (remote)
   3. Neo4j — persist PRISMA ontology as reasoning graph
-  4. Qdrant — embed entities with PRISMA-tagged payloads for semantic retrieval
+  4. Neo4j Vectors — embed entities with PRISMA-tagged payloads for semantic retrieval
   5. JSON export — for visualization
 """
 
@@ -43,6 +43,7 @@ def _persist_to_neo4j(
     hyperedges: List[Dict[str, Any]] = None,
     paper_id: str = "",
     chunks: List[Dict[str, Any]] = None,
+    session_id: str = "",
 ) -> Dict[str, Any]:
     """
     Persist PRISMA entities and relations to Neo4j.
@@ -72,6 +73,14 @@ def _persist_to_neo4j(
         rels_created = 0
 
         with driver.session() as session:
+            if session_id:
+                session.run(
+                    "MERGE (s:ReasoningSession {session_id: $sid}) "
+                    "ON CREATE SET s.created_at = datetime() "
+                    "SET s.updated_at = datetime()",
+                    sid=session_id,
+                )
+
             # Create vector indexes if they don't exist
             # Note: Requires Neo4j 5.x+
             session.run(
@@ -151,6 +160,15 @@ def _persist_to_neo4j(
                     )
                     nodes_created += 1
 
+                    if session_id:
+                        session.run(
+                            f"MATCH (s:ReasoningSession {{session_id: $sid}}) "
+                            f"MATCH (e:{label}:PRISMAEntity {{text: $text}}) "
+                            f"MERGE (e)-[:IN_SESSION]->(s)",
+                            sid=session_id,
+                            text=text,
+                        )
+
                     # Ground the entity back to its exact source chunk (Provenance routing)
                     source_chunk = ent.get("source_chunk_text")
                     if source_chunk:
@@ -189,14 +207,28 @@ def _persist_to_neo4j(
                     # Create the central Hyperedge node
                     session.run(
                         "MERGE (h:Hyperedge {hyperedge_id: $hid}) "
-                        "ON CREATE SET h.principle_name = $pname, h.weight = $weight, h.paper_ids = $pids "
-                        "ON MATCH SET h.paper_ids = [x IN h.paper_ids + $pids WHERE x IS NOT NULL]",
+                        "ON CREATE SET h.principle_name = $pname, h.weight = $weight, h.paper_ids = $pids, "
+                        "  h.checklist_tags = $checklist_tags, h.source_entity_labels = $source_labels "
+                        "ON MATCH SET h.paper_ids = [x IN h.paper_ids + $pids WHERE x IS NOT NULL], "
+                        "  h.checklist_tags = [x IN coalesce(h.checklist_tags, []) + $checklist_tags WHERE x IS NOT NULL], "
+                        "  h.source_entity_labels = [x IN coalesce(h.source_entity_labels, []) + $source_labels WHERE x IS NOT NULL]",
                         hid=he["hyperedge_id"],
                         pname=he["principle_name"],
                         weight=he["weight"],
-                        pids=he["paper_ids"]
+                        pids=he["paper_ids"],
+                        checklist_tags=he.get("checklist_tags", []),
+                        source_labels=he.get("source_entity_labels", []),
                     )
                     nodes_created += 1
+
+                    if session_id:
+                        session.run(
+                            "MATCH (s:ReasoningSession {session_id: $sid}) "
+                            "MATCH (h:Hyperedge {hyperedge_id: $hid}) "
+                            "MERGE (h)-[:IN_SESSION]->(s)",
+                            sid=session_id,
+                            hid=he["hyperedge_id"],
+                        )
 
                     # Connect members to it via IN_HYPEREDGE
                     for member_id in he["member_entity_ids"]:
@@ -300,6 +332,12 @@ async def knowledge_graph_node(
     config = config or {}
     cfgr = config.get("configurable", {})
     llm = cfgr.get("llm_deep") or cfgr.get("llm")  # prefer deep tier
+    session_id = (
+        cfgr.get("session_id")
+        or os.getenv("AGENTIC_RUN_ID")
+        or state.get("project_id")
+        or "default-session"
+    )
 
     chunks = state.get("chunks", [])
     all_entities: List[Dict[str, Any]] = []
@@ -405,7 +443,14 @@ async def knowledge_graph_node(
         pid_relations = [r for r in all_relations if pid in str(r[0])]
         pid_hyperedges = [h for h in all_hyperedges if pid in h.get("paper_ids", [])]
         pid_chunks = [c for c in chunks[:sample_size] if c.get("paper_id") == pid]
-        result = _persist_to_neo4j(pid_entities, pid_relations, hyperedges=pid_hyperedges, paper_id=pid, chunks=pid_chunks)
+        result = _persist_to_neo4j(
+            pid_entities,
+            pid_relations,
+            hyperedges=pid_hyperedges,
+            paper_id=pid,
+            chunks=pid_chunks,
+            session_id=session_id,
+        )
         if result.get("neo4j_status") == "success":
             neo4j_result = result
 
@@ -425,6 +470,7 @@ async def knowledge_graph_node(
         "neo4j": neo4j_result,
         "embedding": embed_result,
         "graph_export_path": graph_path,
+        "session_id": session_id,
     }
 
     audit_log = append_audit(

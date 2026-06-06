@@ -263,6 +263,9 @@ def run_validation_gate(
         "post_literature_review": [
             (validate_search_coverage, validation_config.get("search_coverage", {})),
         ],
+        "post_dark_data_ingestion": [
+            (validate_search_coverage, validation_config.get("search_coverage", {})),
+        ],
         "post_data_processing": [
             (validate_extraction_completeness, validation_config.get("extraction", {})),
         ],

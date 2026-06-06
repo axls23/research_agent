@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 254" width="980" height="254">
+<style>text{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;fill:#202124}.title{font-weight:700;font-size:20px}.label{font-size:14px}.value{font-size:13px}</style>
+<rect width="100%" height="100%" fill="#fff"/>
+<text x="24" y="30" class="title">Parallel-3 aggregate generation throughput</text>
+<text x="24" y="76" class="label">coding / target-only</text>
+<rect x="220" y="56" width="577" height="26" rx="4" fill="#2f6f73"/>
+<text x="805" y="74" class="value">47.14 tok/s</text>
+<text x="24" y="122" class="label">general / target-only</text>
+<rect x="220" y="102" width="593" height="26" rx="4" fill="#2f6f73"/>
+<text x="821" y="120" class="value">48.42 tok/s</text>
+<text x="24" y="168" class="label">coding / mtp-q8</text>
+<rect x="220" y="148" width="619" height="26" rx="4" fill="#b45f35"/>
+<text x="847" y="166" class="value">50.57 tok/s</text>
+<text x="24" y="214" class="label">general / mtp-q8</text>
+<rect x="220" y="194" width="620" height="26" rx="4" fill="#b45f35"/>
+<text x="848" y="212" class="value">50.60 tok/s</text>
+</svg>

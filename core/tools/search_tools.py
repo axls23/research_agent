@@ -13,8 +13,31 @@ import re
 from typing import Any, Dict, List, Optional
 
 import aiohttp
+import time
 
 logger = logging.getLogger(__name__)
+
+_ARXIV_LOCK = asyncio.Lock()
+_ARXIV_LAST_REQUEST = 0.0
+
+_SEMANTIC_SCHOLAR_LOCK = asyncio.Lock()
+_SEMANTIC_SCHOLAR_LAST_REQUEST = 0.0
+
+async def _rate_limit_arxiv():
+    global _ARXIV_LAST_REQUEST
+    async with _ARXIV_LOCK:
+        elapsed = time.time() - _ARXIV_LAST_REQUEST
+        if elapsed < 3.0:
+            await asyncio.sleep(3.0 - elapsed)
+        _ARXIV_LAST_REQUEST = time.time()
+
+async def _rate_limit_semantic_scholar():
+    global _SEMANTIC_SCHOLAR_LAST_REQUEST
+    async with _SEMANTIC_SCHOLAR_LOCK:
+        elapsed = time.time() - _SEMANTIC_SCHOLAR_LAST_REQUEST
+        if elapsed < 1.1:
+            await asyncio.sleep(1.1 - elapsed)
+        _SEMANTIC_SCHOLAR_LAST_REQUEST = time.time()
 
 
 # ---------------------------------------------------------------------------
@@ -68,37 +91,97 @@ class PaperMeta:
 async def search_arxiv(
     query: str,
     max_results: int = 50,
+    max_retries: int = 4,
 ) -> List[PaperMeta]:
     """
     Search ArXiv for papers matching the query.
 
-    Uses the ``arxiv`` Python library for structured API access.
+    Uses aiohttp and feedparser directly to adhere to the arXiv API policy,
+    including a proper User-Agent and respecting rate limits.
     """
-    import arxiv
+    import urllib.parse
+    import feedparser
 
     papers: List[PaperMeta] = []
+    
+    # ArXiv API base URL
+    base_url = "http://export.arxiv.org/api/query?"
+    
+    # Properly encode the search query
+    encoded_query = urllib.parse.quote(query)
+    
+    fetch_count = min(max_results, 2000)
+    
+    url = f"{base_url}search_query=all:{encoded_query}&start=0&max_results={fetch_count}&sortBy=relevance&sortOrder=descending"
+
+    headers = {
+        "User-Agent": "ResearchAgent/1.0 (mailto:research@example.com)",
+    }
 
     try:
-        search = arxiv.Search(
-            query=query,
-            max_results=max_results,
-            sort_by=arxiv.SortCriterion.Relevance,
-        )
+        data = None
+        async with aiohttp.ClientSession() as session:
+            for attempt in range(max_retries):
+                if attempt > 0:
+                    # Enforce the 3-second delay requirement between requests/retries
+                    await asyncio.sleep(3.0)
 
-        # arxiv library is synchronous — run in executor
-        loop = asyncio.get_event_loop()
-        results = await loop.run_in_executor(None, lambda: list(search.results()))
+                await _rate_limit_arxiv()
 
-        for r in results:
-            paper_id = re.sub(r"v\d+$", "", r.entry_id.split("/")[-1])
+                async with session.get(
+                    url,
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=30),
+                ) as resp:
+                    if resp.status in (429, 503) and attempt < max_retries - 1:
+                        sleep_time = (2 ** attempt) + 3.0
+                        logger.warning(f"ArXiv rate limited ({resp.status}). Retrying in {sleep_time}s...")
+                        await asyncio.sleep(sleep_time)
+                        continue
+                    
+                    if resp.status != 200:
+                        logger.warning(f"ArXiv returned {resp.status}")
+                        return papers
+
+                    data = await resp.text()
+                    break
+
+        if not data:
+            return papers
+
+        # Parse the ATOM feed using feedparser
+        feed = feedparser.parse(data)
+        
+        for entry in feed.entries:
+            entry_id_full = entry.get("id", "")
+            paper_id = re.sub(r"v\d+$", "", entry_id_full.split("/")[-1])
+            
+            title = entry.get("title", "").replace("\n", " ")
+            authors = [author.get("name", "") for author in entry.get("authors", [])]
+            
+            year = None
+            published_parsed = entry.get("published_parsed")
+            if published_parsed:
+                year = published_parsed.tm_year
+                
+            abstract = entry.get("summary", "").replace("\n", " ")
+            
+            pdf_url = ""
+            for link in entry.get("links", []):
+                if link.get("type") == "application/pdf":
+                    pdf_url = link.get("href", "")
+                    break
+            
+            source_url = pdf_url or entry_id_full
+
             papers.append(
                 PaperMeta(
                     paper_id=paper_id,
-                    title=r.title,
-                    authors=[a.name for a in r.authors],
-                    year=r.published.year if r.published else None,
-                    abstract=r.summary,
-                    source_url=r.pdf_url or r.entry_id,
+                    title=title,
+                    authors=authors,
+                    year=year,
+                    abstract=abstract,
+                    source_url=source_url,
                     database="arxiv",
                 )
             )
@@ -118,6 +201,7 @@ async def search_arxiv(
 async def search_semantic_scholar(
     query: str,
     max_results: int = 50,
+    max_retries: int = 6,
 ) -> List[PaperMeta]:
     """
     Search Semantic Scholar API (free, no key required for basic tier).
@@ -133,15 +217,28 @@ async def search_semantic_scholar(
     }
 
     try:
+        data = None
         async with aiohttp.ClientSession() as session:
-            async with session.get(
-                url, params=params, timeout=aiohttp.ClientTimeout(total=30)
-            ) as resp:
-                if resp.status != 200:
-                    logger.warning(f"Semantic Scholar returned {resp.status}")
-                    return papers
+            for attempt in range(max_retries):
+                await _rate_limit_semantic_scholar()
+                
+                async with session.get(
+                    url, params=params, timeout=aiohttp.ClientTimeout(total=30)
+                ) as resp:
+                    if resp.status == 429 and attempt < max_retries - 1:
+                        sleep_time = (2 ** attempt) * 2 + 1
+                        logger.warning(f"Semantic Scholar rate limited (429). Retrying in {sleep_time}s...")
+                        await asyncio.sleep(sleep_time)
+                        continue
+                    if resp.status != 200:
+                        logger.warning(f"Semantic Scholar returned {resp.status}")
+                        return papers
 
-                data = await resp.json()
+                    data = await resp.json()
+                    break
+        
+        if not data:
+            return papers
 
         for item in data.get("data", []):
             ext = item.get("externalIds") or {}
@@ -174,6 +271,7 @@ async def search_semantic_scholar(
 async def search_crossref(
     query: str,
     max_results: int = 50,
+    max_retries: int = 4,
 ) -> List[PaperMeta]:
     """
     Search Crossref for DOI-registered works.
@@ -192,18 +290,29 @@ async def search_crossref(
     }
 
     try:
+        data = None
         async with aiohttp.ClientSession() as session:
-            async with session.get(
-                url,
-                params=params,
-                headers=headers,
-                timeout=aiohttp.ClientTimeout(total=30),
-            ) as resp:
-                if resp.status != 200:
-                    logger.warning(f"Crossref returned {resp.status}")
-                    return papers
+            for attempt in range(max_retries):
+                async with session.get(
+                    url,
+                    params=params,
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=30),
+                ) as resp:
+                    if resp.status == 429 and attempt < max_retries - 1:
+                        sleep_time = 2 ** attempt
+                        logger.warning(f"Crossref rate limited (429). Retrying in {sleep_time}s...")
+                        await asyncio.sleep(sleep_time)
+                        continue
+                    if resp.status != 200:
+                        logger.warning(f"Crossref returned {resp.status}")
+                        return papers
 
-                data = await resp.json()
+                    data = await resp.json()
+                    break
+
+        if not data:
+            return papers
 
         for item in data.get("message", {}).get("items", []):
             title_list = item.get("title", [])

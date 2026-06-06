@@ -4,14 +4,14 @@
 
 # ===== System Configuration =====
 system:
-  name: "Research Agent System"
-  version: "0.2.0-phase1"
+  name: "NEXUS Enterprise Mapping System"
+  version: "0.3.0-nexus-pivot"
   mode: "development"  # development | production
   debug: true
 
 # ===== LLM Configuration =====
 llm:
-  provider: "ollama"  # ollama | openai | anthropic | groq | airllm
+  provider: "ollama"  # local-first policy
   model: "qwen2.5:3b"
   temperature: 0.7
   max_tokens: 8192
@@ -19,12 +19,10 @@ llm:
   
   # Fallback models
   fallback_models:
-    - "gemini-1.5-pro"
-    - "gpt-4o"
-    - "llama-3.1-8b-instruct"
+    - "qwen2.5:3b"
   
   # Groq Configuration
-  groq_enabled: true
+  groq_enabled: false
   groq_api_key: null  # Set via GROQ_API_KEY environment variable
   groq_default_model: "llama-3.1-8b-instant"
   groq_models:
@@ -53,8 +51,9 @@ llm:
 
   # Agent-to-tier mapping
   agent_tiers:
-    literature_review: "fast"
+    dark_data_ingestion: "fast"
     data_processing: "fast"
+    rosetta_core: "deep"
     knowledge_graph: "deep"
     analysis: "deep"
     writing: "deep"
@@ -65,17 +64,21 @@ llm:
 agents:
   # Enable/disable specific agents
   enabled:
-    - "literature_review"
+    - "dark_data_ingestion"
     - "data_processing"
+    - "rosetta_core"
     - "analysis"
     - "writing_assistant"
     - "knowledge_graph"
     - "collaboration"
   
   # Agent-specific settings
-  literature_review:
-    max_papers: 50
-    embedding_model: "all-MiniLM-L6-v2"
+  dark_data_ingestion:
+    source_patterns: ["data/**/*", "inputs/**/*", "papers/**/*", "chunks/**/*"]
+    max_files: 120
+
+  rosetta_core:
+    top_terms: 30
     
   data_processing:
     chunk_size: 1000

@@ -1,0 +1,214 @@
+Task 3: produce a detailed coding analysis. Be specific and structured.
+
+Evaluate this Rust cache service for correctness and performance. Discuss lock granularity, eviction, stale reads, memory pressure, async blocking, metrics, and property tests.
+
+```rust
+pub struct Cache {
+    items: Arc<Mutex<HashMap<String, Vec<u8>>>>,
+}
+
+impl Cache {
+    pub async fn get_or_fill<F, Fut>(&self, key: String, fill: F) -> Vec<u8>
+    where F: FnOnce() -> Fut, Fut: Future<Output = Vec<u8>> {
+        if let Some(v) = self.items.lock().unwrap().get(&key) {
+            return v.clone();
+        }
+        let v = fill().await;
+        self.items.lock().unwrap().insert(key, v.clone());
+        v
+    }
+}
+```
+
+---
+Evaluate this Rust cache service for correctness and performance. Discuss lock granularity, eviction, stale reads, memory pressure, async blocking, metrics, and property tests.
+
+```rust
+pub struct Cache {
+    items: Arc<Mutex<HashMap<String, Vec<u8>>>>,
+}
+
+impl Cache {
+    pub async fn get_or_fill<F, Fut>(&self, key: String, fill: F) -> Vec<u8>
+    where F: FnOnce() -> Fut, Fut: Future<Output = Vec<u8>> {
+        if let Some(v) = self.items.lock().unwrap().get(&key) {
+            return v.clone();
+        }
+        let v = fill().await;
+        self.items.lock().unwrap().insert(key, v.clone());
+        v
+    }
+}
+```
+
+---
+Evaluate this Rust cache service for correctness and performance. Discuss lock granularity, eviction, stale reads, memory pressure, async blocking, metrics, and property tests.
+
+```rust
+pub struct Cache {
+    items: Arc<Mutex<HashMap<String, Vec<u8>>>>,
+}
+
+impl Cache {
+    pub async fn get_or_fill<F, Fut>(&self, key: String, fill: F) -> Vec<u8>
+    where F: FnOnce() -> Fut, Fut: Future<Output = Vec<u8>> {
+        if let Some(v) = self.items.lock().unwrap().get(&key) {
+            return v.clone();
+        }
+        let v = fill().await;
+        self.items.lock().unwrap().insert(key, v.clone());
+        v
+    }
+}
+```
+
+---
+Evaluate this Rust cache service for correctness and performance. Discuss lock granularity, eviction, stale reads, memory pressure, async blocking, metrics, and property tests.
+
+```rust
+pub struct Cache {
+    items: Arc<Mutex<HashMap<String, Vec<u8>>>>,
+}
+
+impl Cache {
+    pub async fn get_or_fill<F, Fut>(&self, key: String, fill: F) -> Vec<u8>
+    where F: FnOnce() -> Fut, Fut: Future<Output = Vec<u8>> {
+        if let Some(v) = self.items.lock().unwrap().get(&key) {
+            return v.clone();
+        }
+        let v = fill().await;
+        self.items.lock().unwrap().insert(key, v.clone());
+        v
+    }
+}
+```
+
+---
+Evaluate this Rust cache service for correctness and performance. Discuss lock granularity, eviction, stale reads, memory pressure, async blocking, metrics, and property tests.
+
+```rust
+pub struct Cache {
+    items: Arc<Mutex<HashMap<String, Vec<u8>>>>,
+}
+
+impl Cache {
+    pub async fn get_or_fill<F, Fut>(&self, key: String, fill: F) -> Vec<u8>
+    where F: FnOnce() -> Fut, Fut: Future<Output = Vec<u8>> {
+        if let Some(v) = self.items.lock().unwrap().get(&key) {
+            return v.clone();
+        }
+        let v = fill().await;
+        self.items.lock().unwrap().insert(key, v.clone());
+        v
+    }
+}
+```
+
+---
+Evaluate this Rust cache service for correctness and performance. Discuss lock granularity, eviction, stale reads, memory pressure, async blocking, metrics, and property tests.
+
+```rust
+pub struct Cache {
+    items: Arc<Mutex<HashMap<String, Vec<u8>>>>,
+}
+
+impl Cache {
+    pub async fn get_or_fill<F, Fut>(&self, key: String, fill: F) -> Vec<u8>
+    where F: FnOnce() -> Fut, Fut: Future<Output = Vec<u8>> {
+        if let Some(v) = self.items.lock().unwrap().get(&key) {
+            return v.clone();
+        }
+        let v = fill().await;
+        self.items.lock().unwrap().insert(key, v.clone());
+        v
+    }
+}
+```
+
+---
+Evaluate this Rust cache service for correctness and performance. Discuss lock granularity, eviction, stale reads, memory pressure, async blocking, metrics, and property tests.
+
+```rust
+pub struct Cache {
+    items: Arc<Mutex<HashMap<String, Vec<u8>>>>,
+}
+
+impl Cache {
+    pub async fn get_or_fill<F, Fut>(&self, key: String, fill: F) -> Vec<u8>
+    where F: FnOnce() -> Fut, Fut: Future<Output = Vec<u8>> {
+        if let Some(v) = self.items.lock().unwrap().get(&key) {
+            return v.clone();
+        }
+        let v = fill().await;
+        self.items.lock().unwrap().insert(key, v.clone());
+        v
+    }
+}
+```
+
+---
+Evaluate this Rust cache service for correctness and performance. Discuss lock granularity, eviction, stale reads, memory pressure, async blocking, metrics, and property tests.
+
+```rust
+pub struct Cache {
+    items: Arc<Mutex<HashMap<String, Vec<u8>>>>,
+}
+
+impl Cache {
+    pub async fn get_or_fill<F, Fut>(&self, key: String, fill: F) -> Vec<u8>
+    where F: FnOnce() -> Fut, Fut: Future<Output = Vec<u8>> {
+        if let Some(v) = self.items.lock().unwrap().get(&key) {
+            return v.clone();
+        }
+        let v = fill().await;
+        self.items.lock().unwrap().insert(key, v.clone());
+        v
+    }
+}
+```
+
+---
+Evaluate this Rust cache service for correctness and performance. Discuss lock granularity, eviction, stale reads, memory pressure, async blocking, metrics, and property tests.
+
+```rust
+pub struct Cache {
+    items: Arc<Mutex<HashMap<String, Vec<u8>>>>,
+}
+
+impl Cache {
+    pub async fn get_or_fill<F, Fut>(&self, key: String, fill: F) -> Vec<u8>
+    where F: FnOnce() -> Fut, Fut: Future<Output = Vec<u8>> {
+        if let Some(v) = self.items.lock().unwrap().get(&key) {
+            return v.clone();
+        }
+        let v = fill().await;
+        self.items.lock().unwrap().insert(key, v.clone());
+        v
+    }
+}
+```
+
+---
+Evaluate this Rust cache service for correctness and performance. Discuss lock granularity, eviction, stale reads, memory pressure, async blocking, metrics, and property tests.
+
+```rust
+pub struct Cache {
+    items: Arc<Mutex<HashMap<String, Vec<u8>>>>,
+}
+
+impl Cache {
+    pub async fn get_or_fill<F, Fut>(&self, key: String, fill: F) -> Vec<u8>
+    where F: FnOnce() -> Fut, Fut: Future<Output = Vec<u8>> {
+        if let Some(v) = self.items.lock().unwrap().get(&key) {
+            return v.clone();
+        }
+        let v = fill().await;
+        self.items.lock().unwrap().insert(key, v.clone());
+        v
+    }
+}
+```
+
+
+Now answer the task in depth. Do not summarize the prompt; provide the requested analysis.
+ Additional constraint: quantify tradeoffs, name failure modes, and include implementation details. Additional constraint: quantify tradeoffs, name failure modes, and include implementation details. Additional constraint: quantify tradeoffs, name failure modes, and include implementation details. Additional constraint: quantify tradeoffs, name failure modes, and include implementation details. Additional constraint: quantify tradeoffs, name failure modes, and include implementation details. Additional constraint: quantify tradeoffs, name failure modes, and include implementation details. Additional constraint: quantify tradeoffs, name failure modes, and include implementation details. Additional constraint: quantify tradeoffs, name failure modes, and include implementation details. Additional constraint: quantify tradeoffs, name failure modes, and include implementation details.

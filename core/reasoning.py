@@ -169,7 +169,7 @@ class ChatNativeReasoning(BaseChatModel):
         from langchain_openai import ChatOpenAI
         base_llm = ChatOpenAI(
             model=os.getenv("RLM_PRIMARY_MODEL", "Qwen/Qwen2.5-1.5B-Instruct"),
-            base_url=os.getenv("OPENAI_API_BASE", "http://172.30.177.136:8000/v1"),
+            base_url=os.getenv("VLLM_BASE_URL", os.getenv("OPENAI_API_BASE", "http://localhost:8000/v1")),
             api_key="dummy",
             temperature=self.temperature
         )

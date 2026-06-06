@@ -2,13 +2,26 @@ name: prisma_2020
 description: "PRISMA 2020 Systematic Review — full validation gates"
 
 required_steps:
-  - literature_review
+  - dark_data_ingestion
   - data_processing
-  - quality_assessment
+  - rosetta_core
   - knowledge_graph
   - analysis
   - writing
   - audit_formatting
+
+reasoning_guide:
+  default_checklist: prisma_2020
+  apply_per_paper: true
+  checklist_items:
+    - "Objective and research question (PICO where available)"
+    - "Eligibility and methodology details"
+    - "Information sources and retrieval context"
+    - "Risk-of-bias and effect-measure reporting"
+    - "Results with certainty and study flow"
+    - "Limitations and practical implications"
+    - "Transparency: funding and data availability"
+    - "Core principle abstraction and hyperedge linkage"
 
 validation:
   search_coverage:

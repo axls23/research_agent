@@ -1,0 +1,175 @@
+Task 1: produce a detailed coding analysis. Be specific and structured.
+
+Review this Python async job scheduler for race conditions, retry behavior, idempotency, transaction boundaries, observability, and tests. Provide concrete code-level changes.
+
+```python
+class Scheduler:
+    async def claim(self, worker):
+        task = await self.db.fetch_one("select * from tasks where state='queued' order by priority desc limit 1")
+        if not task:
+            return None
+        await self.db.execute("update tasks set state='running', worker=$1 where id=$2", worker, task["id"])
+        return task
+
+    async def finish(self, task_id):
+        await self.db.execute("update tasks set state='done' where id=$1", task_id)
+
+    async def fail(self, task_id, error):
+        await self.db.execute("update tasks set attempts=attempts+1, state='queued', last_error=$2 where id=$1", task_id, error)
+```
+
+---
+Review this Python async job scheduler for race conditions, retry behavior, idempotency, transaction boundaries, observability, and tests. Provide concrete code-level changes.
+
+```python
+class Scheduler:
+    async def claim(self, worker):
+        task = await self.db.fetch_one("select * from tasks where state='queued' order by priority desc limit 1")
+        if not task:
+            return None
+        await self.db.execute("update tasks set state='running', worker=$1 where id=$2", worker, task["id"])
+        return task
+
+    async def finish(self, task_id):
+        await self.db.execute("update tasks set state='done' where id=$1", task_id)
+
+    async def fail(self, task_id, error):
+        await self.db.execute("update tasks set attempts=attempts+1, state='queued', last_error=$2 where id=$1", task_id, error)
+```
+
+---
+Review this Python async job scheduler for race conditions, retry behavior, idempotency, transaction boundaries, observability, and tests. Provide concrete code-level changes.
+
+```python
+class Scheduler:
+    async def claim(self, worker):
+        task = await self.db.fetch_one("select * from tasks where state='queued' order by priority desc limit 1")
+        if not task:
+            return None
+        await self.db.execute("update tasks set state='running', worker=$1 where id=$2", worker, task["id"])
+        return task
+
+    async def finish(self, task_id):
+        await self.db.execute("update tasks set state='done' where id=$1", task_id)
+
+    async def fail(self, task_id, error):
+        await self.db.execute("update tasks set attempts=attempts+1, state='queued', last_error=$2 where id=$1", task_id, error)
+```
+
+---
+Review this Python async job scheduler for race conditions, retry behavior, idempotency, transaction boundaries, observability, and tests. Provide concrete code-level changes.
+
+```python
+class Scheduler:
+    async def claim(self, worker):
+        task = await self.db.fetch_one("select * from tasks where state='queued' order by priority desc limit 1")
+        if not task:
+            return None
+        await self.db.execute("update tasks set state='running', worker=$1 where id=$2", worker, task["id"])
+        return task
+
+    async def finish(self, task_id):
+        await self.db.execute("update tasks set state='done' where id=$1", task_id)
+
+    async def fail(self, task_id, error):
+        await self.db.execute("update tasks set attempts=attempts+1, state='queued', last_error=$2 where id=$1", task_id, error)
+```
+
+---
+Review this Python async job scheduler for race conditions, retry behavior, idempotency, transaction boundaries, observability, and tests. Provide concrete code-level changes.
+
+```python
+class Scheduler:
+    async def claim(self, worker):
+        task = await self.db.fetch_one("select * from tasks where state='queued' order by priority desc limit 1")
+        if not task:
+            return None
+        await self.db.execute("update tasks set state='running', worker=$1 where id=$2", worker, task["id"])
+        return task
+
+    async def finish(self, task_id):
+        await self.db.execute("update tasks set state='done' where id=$1", task_id)
+
+    async def fail(self, task_id, error):
+        await self.db.execute("update tasks set attempts=attempts+1, state='queued', last_error=$2 where id=$1", task_id, error)
+```
+
+---
+Review this Python async job scheduler for race conditions, retry behavior, idempotency, transaction boundaries, observability, and tests. Provide concrete code-level changes.
+
+```python
+class Scheduler:
+    async def claim(self, worker):
+        task = await self.db.fetch_one("select * from tasks where state='queued' order by priority desc limit 1")
+        if not task:
+            return None
+        await self.db.execute("update tasks set state='running', worker=$1 where id=$2", worker, task["id"])
+        return task
+
+    async def finish(self, task_id):
+        await self.db.execute("update tasks set state='done' where id=$1", task_id)
+
+    async def fail(self, task_id, error):
+        await self.db.execute("update tasks set attempts=attempts+1, state='queued', last_error=$2 where id=$1", task_id, error)
+```
+
+---
+Review this Python async job scheduler for race conditions, retry behavior, idempotency, transaction boundaries, observability, and tests. Provide concrete code-level changes.
+
+```python
+class Scheduler:
+    async def claim(self, worker):
+        task = await self.db.fetch_one("select * from tasks where state='queued' order by priority desc limit 1")
+        if not task:
+            return None
+        await self.db.execute("update tasks set state='running', worker=$1 where id=$2", worker, task["id"])
+        return task
+
+    async def finish(self, task_id):
+        await self.db.execute("update tasks set state='done' where id=$1", task_id)
+
+    async def fail(self, task_id, error):
+        await self.db.execute("update tasks set attempts=attempts+1, state='queued', last_error=$2 where id=$1", task_id, error)
+```
+
+---
+Review this Python async job scheduler for race conditions, retry behavior, idempotency, transaction boundaries, observability, and tests. Provide concrete code-level changes.
+
+```python
+class Scheduler:
+    async def claim(self, worker):
+        task = await self.db.fetch_one("select * from tasks where state='queued' order by priority desc limit 1")
+        if not task:
+            return None
+        await self.db.execute("update tasks set state='running', worker=$1 where id=$2", worker, task["id"])
+        return task
+
+    async def finish(self, task_id):
+        await self.db.execute("update tasks set state='done' where id=$1", task_id)
+
+    async def fail(self, task_id, error):
+        await self.db.execute("update tasks set attempts=attempts+1, state='queued', last_error=$2 where id=$1", task_id, error)
+```
+
+---
+Review this Python async job scheduler for race conditions, retry behavior, idempotency, transaction boundaries, observability, and tests. Provide concrete code-level changes.
+
+```python
+class Scheduler:
+    async def claim(self, worker):
+        task = await self.db.fetch_one("select * from tasks where state='queued' order by priority desc limit 1")
+        if not task:
+            return None
+        await self.db.execute("update tasks set state='running', worker=$1 where id=$2", worker, task["id"])
+        return task
+
+    async def finish(self, task_id):
+        await self.db.execute("update tasks set state='done' where id=$1", task_id)
+
+    async def fail(self, task_id, error):
+        await self.db.execute("update tasks set attempts=attempts+1, state='queued', last_error=$2 where id=$1", task_id, error)
+```
+
+
+Now answer the task in depth. Do not summarize the prompt; provide the requested analysis.
+ Additional constraint: quantify tradeoffs, name failure modes, and include implementation details. Additional constraint: quantify tradeoffs, name failure modes, and include implementation details. Additional constraint: quantify tradeoffs, name failure modes, and include implementation details. Additional constraint: quantify tradeoffs, name failure modes, and include implementation details. Additional constraint: quantify tradeoffs, name failure modes, and include implementation details.
