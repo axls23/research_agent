@@ -23,7 +23,7 @@ app = FastAPI(title="Research Agent API", version="0.1.0")
 # Allow requests from Next.js frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:8080"],
+    allow_origins=["http://localhost:3000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -66,7 +66,7 @@ _NODE_TO_STAGE = {
 
 
 def _get_agentic_ollama_model() -> str:
-    """Resolve the model used by agentic chat routes to Ollama."""
+    """Resolve the model used by agentic chat routes to a local provider."""
     configured = os.getenv("AGENTIC_MODEL") or os.getenv("OLLAMA_MODEL") or "qwen2.5:3b"
     configured = configured.strip()
     default_model = os.getenv("OLLAMA_MODEL", "qwen2.5:3b").strip()
@@ -77,6 +77,10 @@ def _get_agentic_ollama_model() -> str:
         return configured
     if ":" in configured:
         prefix = configured.split(":", 1)[0].lower()
+        # vllm/llamacpp: local OpenAI-compatible servers (vLLM, llama.cpp),
+        # so they stay within the local-first policy.
+        if prefix in {"vllm", "llamacpp"}:
+            return configured
         if prefix in {"groq", "fast_rlm", "fast-rlm", "openai", "anthropic", "airllm"}:
             return f"ollama:{default_model}"
     return f"ollama:{configured}"
@@ -526,6 +530,7 @@ async def backend_monitor(lines: int = 120):
             "up": True,
             "pid": os.getpid(),
             "cwd": str(Path.cwd()),
+            "agentic_model": _get_agentic_ollama_model(),
         },
         "ollama": _check_ollama(),
         "subagents": subagents,

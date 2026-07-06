@@ -54,6 +54,10 @@ def _normalize_ollama_model(model: str) -> str:
         return value
     if ":" in value:
         prefix = value.split(":", 1)[0].lower()
+        # vllm: targets any local OpenAI-compatible server (vLLM, llama.cpp)
+        # via VLLM_BASE_URL, so it stays within the local-first policy.
+        if prefix == "vllm":
+            return value
         known_non_ollama = {"groq", "fast_rlm", "fast-rlm", "openai", "anthropic", "airllm"}
         if prefix in known_non_ollama:
             logger.warning(
@@ -137,12 +141,10 @@ def _resolve_research_inputs(args: argparse.Namespace) -> Tuple[str, str, List[s
 async def main_async(args):
     """Async execution of the pipeline"""
     requested_mode = (args.mode or "agentic").lower()
-    if requested_mode != "agentic":
-        logger.warning("Mode '%s' requested; routing to agentic mode.", requested_mode)
 
     resolved_model = _normalize_ollama_model(args.model or os.getenv("OLLAMA_MODEL", "qwen2.5:3b"))
 
-    logger.info("Using Mode: agentic")
+    logger.info("Using Mode: %s", requested_mode)
     logger.info(f"Using Rigor Level: {args.rigor}")
     logger.info("Using Model: %s", resolved_model)
 
@@ -157,8 +159,10 @@ async def main_async(args):
             research_goals=goals,
             rigor_level=args.rigor,
             interactive=False,  # Set to False so it doesn't wait indefinitely in tests
-            mode="agentic",
+            allow_auto_override=args.auto_override,
+            mode=requested_mode,
             agentic_model=resolved_model,
+            enable_external_search=args.external_search,
         )
 
         logger.info("[SUCCESS] Research Pipeline Completed!")
@@ -179,7 +183,24 @@ def main():
         type=str,
         choices=["default", "langgraph", "agentic"],
         default="agentic",
-        help="Execution mode alias. All values route to agentic LangGraph deep-agent mode.",
+        help=(
+            "Execution mode: 'agentic' runs the ReAct supervisor; "
+            "'default'/'langgraph' run the deterministic StateGraph pipeline "
+            "with validation gates."
+        ),
+    )
+    parser.add_argument(
+        "--external-search",
+        action="store_true",
+        help=(
+            "Opt into the external literature enrichment stage "
+            "(ArXiv/Semantic Scholar/Crossref). Off by default per air-gap policy."
+        ),
+    )
+    parser.add_argument(
+        "--auto-override",
+        action="store_true",
+        help="Allow failed validation gates to auto-override in non-interactive runs.",
     )
     parser.add_argument(
         "--rigor",
@@ -221,17 +242,17 @@ def main():
     args.model = resolved_model
 
     # Expose to other components via environment variables
-    os.environ["RESEARCH_AGENT_MODE"] = "agentic"
+    os.environ["RESEARCH_AGENT_MODE"] = args.mode
     os.environ["RESEARCH_AGENT_RIGOR"] = args.rigor
     os.environ["AGENTIC_MODEL"] = resolved_model
 
     print(
         f"""
-    =======================================
-    |       Research Agent System         |
-    |   AI-Powered Research Assistant     |
-    =======================================
-    Mode: agentic | Rigor: {args.rigor} | Model: {resolved_model}
+    =============================================
+    |      NEXUS Cross-Domain Laboratory        |
+    |  Local-First Dark-Data Discovery Engine   |
+    =============================================
+    Mode: {args.mode} | Rigor: {args.rigor} | Model: {resolved_model}
     """
     )
 

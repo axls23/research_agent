@@ -14,7 +14,6 @@ call :check_python || goto :fail
 echo Preparing clean demo ports...
 call :free_port 8000
 call :free_port 3000
-call :free_port 8080
 
 echo [1/4] Ensuring Ollama server is live...
 call :ensure_ollama || goto :fail
@@ -27,20 +26,12 @@ echo [3/4] Starting frontend ...
 start "Research Frontend" cmd /k "cd /d ""%~dp0"" && run_frontend.bat"
 
 set "FRONTEND_URL=http://localhost:3000"
-call :wait_http "%FRONTEND_URL%" 90
-if errorlevel 1 (
-  set "FRONTEND_URL=http://localhost:8080/index.html"
-  call :wait_http "%FRONTEND_URL%" 30 || goto :fail_frontend
-)
+call :wait_http "%FRONTEND_URL%" 90 || goto :fail_frontend
 
 echo [4/4] Opening presentation pages...
-if /I "%FRONTEND_URL%"=="http://localhost:3000" (
-  start "" "http://localhost:3000/backend"
-  start "" "http://localhost:3000/chat"
-  start "" "http://localhost:3000/workflow"
-) else (
-  start "" "%FRONTEND_URL%"
-)
+start "" "http://localhost:3000/backend"
+start "" "http://localhost:3000/chat"
+start "" "http://localhost:3000/workflow"
 
 echo.
 echo Demo is running.

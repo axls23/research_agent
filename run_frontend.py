@@ -1,9 +1,7 @@
-"""Frontend runner supporting Next.js (`frontend-next`) and legacy static frontend."""
+"""Frontend runner for the Next.js frontend (`frontend-next`)."""
 
-import http.server
 import os
 import shutil
-import socketserver
 import subprocess
 import threading
 import time
@@ -12,7 +10,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).parent.resolve()
 NEXT_DIR = ROOT / "frontend-next"
-LEGACY_DIR = ROOT / "frontend"
 
 
 def _open_browser_delayed(url: str, delay: float = 2.0) -> None:
@@ -52,47 +49,12 @@ def _run_next_frontend() -> int:
     return subprocess.call([npm, "run", "dev", "--", "--port", port], cwd=str(NEXT_DIR))
 
 
-class _LegacyHandler(http.server.SimpleHTTPRequestHandler):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, directory=str(LEGACY_DIR), **kwargs)
-
-    def end_headers(self):
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
-        super().end_headers()
-
-
-def _run_legacy_frontend() -> int:
-    if not LEGACY_DIR.exists():
-        print("Error: neither frontend-next nor legacy frontend directory was found.")
-        return 1
-
-    port = int(os.getenv("LEGACY_FRONTEND_PORT", "8080"))
-    url = f"http://localhost:{port}/index.html"
-    print(f"Starting legacy static frontend on {url}")
-    print("Press Ctrl+C to stop the server")
-
-    browser_thread = threading.Thread(target=_open_browser_delayed, args=(url,))
-    browser_thread.daemon = True
-    browser_thread.start()
-
-    try:
-        with socketserver.TCPServer(("", port), _LegacyHandler) as httpd:
-            httpd.serve_forever()
-    except KeyboardInterrupt:
-        return 0
-    return 0
-
-
 if __name__ == "__main__":
     print("=======================================")
     print("    Research Agent Frontend Server")
     print("=======================================")
 
     try:
-        if NEXT_DIR.exists():
-            raise SystemExit(_run_next_frontend())
-        raise SystemExit(_run_legacy_frontend())
+        raise SystemExit(_run_next_frontend())
     except KeyboardInterrupt:
         print("\nServer stopped.")
