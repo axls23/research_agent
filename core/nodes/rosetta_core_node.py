@@ -5,6 +5,7 @@ Rosetta Core node: translate silo-specific jargon into shared principles.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import uuid
@@ -81,6 +82,60 @@ def translate_records_jargon(records: List[Dict[str, Any]], top_n: int = 30) -> 
     return mappings
 
 
+_LLM_TRANSLATION_SYSTEM = (
+    "You are the NEXUS Rosetta Core: a jargon-translation engine that maps "
+    "domain-specific terminology onto domain-agnostic core principles so that "
+    "structurally similar work in different fields can be linked (e.g. "
+    "biology's 'angiogenesis' → 'decentralized_resource_calling'). "
+    "For each input term, produce a short snake_case principle name that "
+    "captures the underlying structural/mathematical mechanism, never the "
+    "surface domain. Respond ONLY with a JSON object mapping each term to "
+    "its principle string."
+)
+
+
+async def translate_terms_with_llm(
+    llm: Any,
+    mappings: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Refine heuristic term→principle mappings with the deep-tier LLM.
+
+    Falls back to the heuristic principles on any parse or transport error, so
+    the node stays deterministic when no model is reachable.
+    """
+    terms = [m["term"] for m in mappings]
+    if not terms:
+        return mappings
+
+    prompt = (
+        "Translate these domain terms into core principles:\n"
+        + "\n".join(f"- {t}" for t in terms)
+    )
+    try:
+        raw = await llm.generate(
+            prompt, system_prompt=_LLM_TRANSLATION_SYSTEM, temperature=0.2
+        )
+        first, last = raw.find("{"), raw.rfind("}")
+        translated = json.loads(raw[first : last + 1]) if first != -1 and last != -1 else {}
+    except Exception as e:
+        logger.warning("Rosetta LLM translation failed (%s); using heuristic mapping", e)
+        return mappings
+
+    refined = []
+    for m in mappings:
+        principle = translated.get(m["term"])
+        if isinstance(principle, str) and principle.strip():
+            principle = re.sub(r"[^a-z0-9_]+", "_", principle.strip().lower()).strip("_")
+        refined.append(
+            {
+                **m,
+                "core_principle": principle or m["core_principle"],
+                "translation_source": "llm" if principle else "heuristic",
+            }
+        )
+    return refined
+
+
 async def rosetta_core_node(
     state: ResearchState,
     config: Dict[str, Any] | None = None,
@@ -91,9 +146,15 @@ async def rosetta_core_node(
 
     records = list(state.get("papers", []))
     top_n = int(cfgr.get("rosetta_top_terms", 30))
-    
+    llm = cfgr.get("llm_deep") or cfgr.get("llm")  # prefer deep tier for abstraction
+
     mappings = translate_records_jargon(records, top_n=top_n)
-    
+    translation_mode = "local_heuristic"
+    if llm and mappings:
+        mappings = await translate_terms_with_llm(llm, mappings)
+        if any(m.get("translation_source") == "llm" for m in mappings):
+            translation_mode = "llm_with_heuristic_fallback"
+
     entities: List[Dict[str, Any]] = []
     hyperedges: List[Dict[str, Any]] = []
 
@@ -136,7 +197,7 @@ async def rosetta_core_node(
         action="translate_jargon_to_core_principles",
         inputs={"record_count": len(records), "mapping_count": len(mappings)},
         output_summary=f"Mapped {len(mappings)} jargon terms into {len(hyperedges)} principles",
-        provenance={"translation_mode": "local_heuristic_plus_llm_optional"},
+        provenance={"translation_mode": translation_mode},
     )
 
     return {

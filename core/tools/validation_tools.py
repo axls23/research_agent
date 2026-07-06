@@ -264,7 +264,15 @@ def run_validation_gate(
             (validate_search_coverage, validation_config.get("search_coverage", {})),
         ],
         "post_dark_data_ingestion": [
-            (validate_search_coverage, validation_config.get("search_coverage", {})),
+            # Local ingestion is judged against dark_data_coverage criteria,
+            # not the academic multi-database search requirements.
+            (
+                validate_search_coverage,
+                validation_config.get(
+                    "dark_data_coverage",
+                    validation_config.get("search_coverage", {}),
+                ),
+            ),
         ],
         "post_data_processing": [
             (validate_extraction_completeness, validation_config.get("extraction", {})),

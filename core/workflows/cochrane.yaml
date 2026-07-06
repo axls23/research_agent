@@ -2,8 +2,9 @@ name: cochrane
 description: "Cochrane Handbook — rigorous systematic review conduct"
 
 required_steps:
-  - literature_review
+  - dark_data_ingestion
   - data_processing
+  - rosetta_core
   - quality_assessment
   - knowledge_graph
   - analysis
@@ -11,6 +12,11 @@ required_steps:
   - audit_formatting
 
 validation:
+  dark_data_coverage:
+    min_databases: 1
+    require_search_log: true
+    min_papers_found: 1
+
   search_coverage:
     min_databases: 4
     require_search_log: true

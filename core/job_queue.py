@@ -27,14 +27,20 @@ def init_db():
             )
         ''')
 
-def enqueue_job(agent_name: str, payload: Dict[str, Any]) -> int:
+def enqueue_job(agent_name: str, payload: Dict[str, Any], status: str = "PENDING") -> int:
+    """Insert a job row.
+
+    status="PENDING" queues the job for an external worker. Inline (in-process)
+    executions insert with status="IN_PROGRESS" so the row acts as a ledger
+    entry that a concurrently running worker can never pick up and re-execute.
+    """
     init_db()
     with sqlite3.connect(DB_PATH) as conn:
         cursor = conn.cursor()
         now = time.time()
         cursor.execute(
-            "INSERT INTO jobs (agent_name, payload, status, created_at, updated_at) VALUES (?, ?, 'PENDING', ?, ?)",
-            (agent_name, json.dumps(payload), now, now)
+            "INSERT INTO jobs (agent_name, payload, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+            (agent_name, json.dumps(payload), status, now, now)
         )
         return cursor.lastrowid
 

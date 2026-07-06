@@ -16,6 +16,23 @@ from core.state import ResearchState, HumanDecision, append_audit
 logger = logging.getLogger(__name__)
 
 
+def _prompt_for_decision(gate_name: str) -> tuple[str, str]:
+    """Block on stdin for a human decision at a failed validation gate."""
+    valid = {"retry", "override", "abort"}
+    while True:
+        try:
+            raw = input(
+                f"Decision for gate '{gate_name}' [retry/override/abort]: "
+            ).strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            logger.warning("No stdin available for gate '%s'; aborting.", gate_name)
+            return "abort", "stdin_unavailable"
+        if raw in valid:
+            reason = input("Reason (optional): ").strip()
+            return raw, reason
+        print(f"Invalid choice '{raw}'. Enter one of: retry, override, abort.")
+
+
 async def human_intervention_node(
     state: ResearchState,
     config: Dict[str, Any] | None = None,
@@ -58,9 +75,21 @@ async def human_intervention_node(
         print(f"  {i}. {failure}")
     print()
 
-    logger.warning("AUTONOMOUS MODE: Intercepted validation failure at '%s'. Automatically overriding to maintain async background progression.", gate_name)
-    decision = "override"
-    reason = "autonomous_background_worker_policy"
+    if interactive:
+        decision, reason = _prompt_for_decision(gate_name)
+    elif allow_auto_override or gate_name.strip().lower() in auto_override_gates:
+        decision = "override"
+        reason = "auto_override_enabled"
+        logger.warning(
+            "Non-interactive override policy applied at gate '%s'.", gate_name
+        )
+    else:
+        decision = "abort"
+        reason = "non_interactive_default_abort"
+        logger.warning(
+            "Non-interactive run with no override policy: aborting at gate '%s'.",
+            gate_name,
+        )
 
     # Record decision
     human_decision: HumanDecision = {

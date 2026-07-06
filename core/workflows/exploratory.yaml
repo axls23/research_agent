@@ -2,8 +2,9 @@ name: exploratory
 description: "Exploratory / rapid literature scan — no validation gates"
 
 required_steps:
-  - literature_review
+  - dark_data_ingestion
   - data_processing
+  - rosetta_core
   - knowledge_graph
   - analysis
   - writing

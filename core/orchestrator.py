@@ -7,14 +7,24 @@ Orchestrates research subagents using the native LangGraph "agents as tools" sup
 
 from __future__ import annotations
 
+import json
 import logging
 import os
+import time
 import uuid
 from typing import Any, Dict, List, Optional
 
 from langgraph.prebuilt import create_react_agent
 from langchain_core.tools import tool
 
+from core.capabilities import (
+    AgentResult,
+    all_capabilities,
+    make_result,
+    render_catalog,
+    resolve_dispatch,
+    resolve_tools,
+)
 from core.llm_provider import local_only_enabled
 
 logger = logging.getLogger(__name__)
@@ -24,6 +34,9 @@ def _enforce_local_model(model: str) -> str:
     if not local_only_enabled():
         return model
     lowered = (model or "").lower()
+    # llama.cpp / vllm are local OpenAI-compatible servers — allowed under air-gap.
+    if lowered.startswith("llamacpp:") or lowered.startswith("vllm:"):
+        return model
     if lowered.startswith("groq:") or lowered.startswith("openai:") or lowered.startswith("mistral:"):
         fallback = os.getenv("OLLAMA_MODEL", "qwen2.5:3b")
         logger.warning(
@@ -43,23 +56,23 @@ MAX_REACT_ITERATIONS = 15
 # System Prompts
 # ---------------------------------------------------------------------------
 
-ORCHESTRATOR_SYSTEM_PROMPT = """\
-You are the NEXUS enterprise orchestrator for dark-data alignment across silos.
-Your job is to run a local-first pipeline that ingests proprietary artifacts,
-translates jargon into shared principles, and builds actionable graph intelligence.
+_ORCHESTRATOR_PROMPT_TEMPLATE = """\
+You are the NEXUS orchestrator: an automated cross-domain scientific laboratory
+for deep-tech R&D teams. Your job is to run a local-first pipeline that ingests
+proprietary artifacts from different domain silos, translates each silo's jargon
+into shared core principles, and builds graph intelligence that surfaces
+isomorphic mappings — structurally identical problems and solutions hiding in
+different fields — so teams can collaborate instead of reinventing the wheel.
 
 CRITICAL: You must behaviorally enforce the requested Rigor Level (e.g. PRISMA 2020) across all your subagent delegations. You are the sovereign gatekeeper of methodology.
 
 ## Available Subagents
-- **literature-search**: Searches external APIs (arXiv, Semantic Scholar) based on research topics.
-- **dark-data-ingestion**: Ingests local enterprise artifacts from configured sources.
-- **data-processing**: Processes PDF papers into text chunks for analysis.
-- **rosetta-core**: Translates silo-specific jargon into core principles.
-- **knowledge-graph**: Extracts structured entities, builds Neo4j reasoning graph,
-    and stores embeddings using native Neo4j Vectors.
-- **analysis**: Performs evidence synthesis, GraphRAG context retrieval, and statistics.
-- **writing**: Drafts enterprise-ready findings and opportunity gaps.
-- **deep-reasoner**: Performs planning and final validation consistency checks.
+{subagent_catalog}
+
+Every subagent call returns a JSON result envelope with fields: agent, status
+("ok" | "error" | "queued"), summary, error, job_id, duration_ms. Inspect the
+status and summary before deciding the next step; if status is "error", either
+retry with a refined query or route around the failure explicitly.
 
 ## Available Tools
 - `neo4j_vector_search(query, prisma_label, limit)` -- Search for semantically similar
@@ -69,62 +82,32 @@ CRITICAL: You must behaviorally enforce the requested Rigor Level (e.g. PRISMA 2
 
 ## Research Workflow
 0. **Plan (Mandatory)**: Call `deep-reasoner` first to create a concise execution plan.
-1. **Topic Extraction & Search**: Extract core research topics from the user's prompt and call `literature-search` to hit external APIs.
-2. **Ingest**: Ingest dark data from local connectors and file sources.
-3. **Process**: Convert found papers into analysable chunks.
-4. **Translate**: Run Rosetta core translation to abstract cross-domain principles.
+1. **Ingest (Primary)**: Ingest dark data from local connectors and file sources. Local enterprise artifacts are the system of record.
+2. **Enrich (Optional)**: Call `literature-search` ONLY if the run explicitly requests external public literature.
+3. **Process**: Convert ingested artifacts into analysable chunks.
+4. **Translate**: Run Rosetta core translation to abstract silo jargon into shared cross-domain principles.
 5. **Extract**: Build the knowledge graph from chunks and translated principles.
 6. **Assess Coverage**: Use `neo4j_vector_search` to check coverage per core domain.
-7. **Analyze**: Run evidence synthesis and pattern detection.
-8. **Write**: Draft sections and report opportunity gaps.
+7. **Analyze**: Run evidence synthesis and cross-silo isomorphic pattern detection.
+8. **Write**: Draft findings, cross-silo mapping alerts, and opportunity gaps.
 9. **Reasoning QA (Mandatory)**: Call `deep-reasoner` to perform a final
     consistency check before returning the answer.
 
 Cap total iterations at {max_iterations}. Document your reasoning at each step.
-""".format(
-    max_iterations=MAX_REACT_ITERATIONS
-)
+"""
 
 
+def _render_orchestrator_prompt() -> str:
+    """Render the supervisor prompt from the current capability registry."""
+    return _ORCHESTRATOR_PROMPT_TEMPLATE.format(
+        subagent_catalog=render_catalog(),
+        max_iterations=MAX_REACT_ITERATIONS,
+    )
 
-SUBAGENT_PROMPTS = {
-    "literature_search": (
-        "You are an academic literature search specialist. Extract research topics from the orchestrator and query external databases (e.g., arXiv, Semantic Scholar) to retrieve papers."
-    ),
-    "dark_data_ingestion": (
-        "You are an enterprise dark-data ingestion specialist. Load local artifacts "
-        "from configured connectors and filesystem sources while preserving provenance."
-    ),
-    "data_processing": (
-        "You are a document processing specialist. Your job is to extract text from "
-        "enterprise documents and split them into chunks suitable for embedding and "
-        "knowledge extraction."
-    ),
-    "rosetta_core": (
-        "You are the Rosetta Core specialist. Translate silo-specific jargon into "
-        "shared principles that can be mapped across departments and domains."
-    ),
-    "knowledge_graph": (
-        "You are a knowledge graph specialist. You build structured knowledge "
-        "graphs aligned with NEXUS principles. Extract entities (Paper, Objective, "
-        "Methodology, Result, Limitation, Implication) and relationships."
-    ),
-    "analysis": (
-        "You are a systematic review analyst. Analyze extracted PRISMA entities to "
-        "identify patterns, contradictions, and gaps. Use GraphRAG retrieval "
-        "(neo4j_vector_search -> neo4j_query) to build rich context before synthesis."
-    ),
-    "writing": (
-        "You are an academic writing specialist drafting sections for a systematic review. "
-        "Produce well-structured, evidence-based academic text. After drafting, check for "
-        "evidence gaps."
-    ),
-    "reasoning": (
-        "You are a deep-reasoning agent with the ability to run Python code to solve "
-        "complex mathematical, logical, or data-heavy problems. Use your Python sandbox "
-        "to verify hypotheses or perform complex calculations when requested."
-    ),
-}
+
+# Rendered once at import for introspection/tests; build_orchestrator()
+# re-renders so tiles registered at runtime appear in the catalog.
+ORCHESTRATOR_SYSTEM_PROMPT = _render_orchestrator_prompt()
 
 
 # ---------------------------------------------------------------------------
@@ -133,20 +116,12 @@ SUBAGENT_PROMPTS = {
 
 
 def _build_subagent_configs(global_model: str = "ollama:qwen2.5:3b") -> List[Dict[str, Any]]:
-    """Build subagent configuration dicts with resolved local model instances."""
-    from core.agent_tools import (
-        literature_search,
-        ingest_dark_data,
-        rosetta_translate,
-        process_documents,
-        extract_prisma_knowledge,
-        neo4j_vector_search,
-        neo4j_query,
-        analyze_evidence,
-        draft_section,
-        validate_quality,
-    )
-    
+    """Build subagent configuration dicts from the capability registry.
+
+    Each dict keeps the legacy shape (name / description / system_prompt /
+    model / tools) consumed by the nexus.py worker, plus a "capability"
+    key carrying the full AgentCapability tile.
+    """
     global_model = _enforce_local_model(global_model)
 
     model_name = global_model.split(":", 1)[1] if ":" in global_model else global_model
@@ -161,6 +136,16 @@ def _build_subagent_configs(global_model: str = "ollama:qwen2.5:3b") -> List[Dic
         ollama_llm = ChatOllama(model=model_name, base_url=base_url)
         subagent_model = ollama_llm
         deep_reasoner_model = ollama_llm
+    elif "llamacpp" in model_lower:
+        from langchain_openai import ChatOpenAI
+        llama_base = os.getenv("LLAMACPP_BASE_URL", "http://127.0.0.1:8001/v1")
+        llama_llm = ChatOpenAI(
+            model=model_name or os.getenv("LLAMACPP_MODEL", "local-model"),
+            base_url=llama_base,
+            api_key=os.getenv("LLAMACPP_API_KEY", "sk-no-key-required"),
+        )
+        subagent_model = llama_llm
+        deep_reasoner_model = llama_llm
     elif "vllm" in model_lower:
         from langchain_openai import ChatOpenAI
         vllm_base = os.getenv("VLLM_BASE_URL", "http://localhost:8000/v1")
@@ -191,61 +176,14 @@ def _build_subagent_configs(global_model: str = "ollama:qwen2.5:3b") -> List[Dic
 
     subagents = [
         {
-            "name": "deep-reasoner",
-            "description": "Call this agent for complex reasoning, math, or planning and final validation consistency checks.",
-            "system_prompt": SUBAGENT_PROMPTS["reasoning"],
-            "model": deep_reasoner_model,
-            "tools": [validate_quality],
-        },
-        {
-            "name": "literature-search",
-            "description": "Search external academic databases (arXiv, Semantic Scholar) based on extracted research topics.",
-            "system_prompt": SUBAGENT_PROMPTS["literature_search"],
-            "model": subagent_model,
-            "tools": [literature_search, validate_quality],
-        },
-        {
-            "name": "dark-data-ingestion",
-            "description": "Ingest enterprise dark data from local files and staged directories.",
-            "system_prompt": SUBAGENT_PROMPTS["dark_data_ingestion"],
-            "model": subagent_model,
-            "tools": [ingest_dark_data, validate_quality],
-        },
-        {
-            "name": "data-processing",
-            "description": "Process staged PDFs or text documents into chunks.",
-            "system_prompt": SUBAGENT_PROMPTS["data_processing"],
-            "model": subagent_model,
-            "tools": [process_documents],
-        },
-        {
-            "name": "rosetta-core",
-            "description": "Translate domain-specific terminology/jargon into shared core engineering principles.",
-            "system_prompt": SUBAGENT_PROMPTS["rosetta_core"],
-            "model": subagent_model,
-            "tools": [rosetta_translate],
-        },
-        {
-            "name": "knowledge-graph",
-            "description": "Extract entities and construct structured Neo4j reasoning graphs.",
-            "system_prompt": SUBAGENT_PROMPTS["knowledge_graph"],
-            "model": subagent_model,
-            "tools": [extract_prisma_knowledge, neo4j_vector_search, neo4j_query],
-        },
-        {
-            "name": "analysis",
-            "description": "Run evidence synthesis and GraphRAG context retrieval.",
-            "system_prompt": SUBAGENT_PROMPTS["analysis"],
-            "model": subagent_model,
-            "tools": [analyze_evidence, neo4j_vector_search, neo4j_query],
-        },
-        {
-            "name": "writing",
-            "description": "Draft academic/enterprise review sections.",
-            "system_prompt": SUBAGENT_PROMPTS["writing"],
-            "model": subagent_model,
-            "tools": [draft_section, neo4j_vector_search, validate_quality],
-        },
+            "name": cap.name,
+            "description": cap.description,
+            "system_prompt": cap.system_prompt,
+            "model": deep_reasoner_model if cap.model_tier == "deep" else subagent_model,
+            "tools": resolve_tools(cap),
+            "capability": cap,
+        }
+        for cap in all_capabilities()
     ]
 
     summary = []
@@ -258,29 +196,133 @@ def _build_subagent_configs(global_model: str = "ollama:qwen2.5:3b") -> List[Dic
     return subagents
 
 
-def _make_subagent_tool(cfg: Dict[str, Any]) -> Any:
-    """Compile subagent runnable and wrap as a tool for the supervisor orchestrator."""
-    name = cfg["name"]
-    description = cfg["description"]
-    system_prompt = cfg["system_prompt"]
-    sub_model = cfg["model"]
-    sub_tools = cfg["tools"]
+def _ledger_start(agent_name: str, query: str) -> Optional[int]:
+    """Best-effort job-queue ledger entry; never blocks execution."""
+    try:
+        from core.job_queue import enqueue_job
 
-    subagent_runnable = create_react_agent(
-        sub_model,
-        sub_tools,
-        prompt=system_prompt
+        return enqueue_job(
+            agent_name, {"query": query, "dispatch": "inline"}, status="IN_PROGRESS"
+        )
+    except Exception as exc:  # noqa: BLE001 — observability must not break runs
+        logger.debug("Job ledger unavailable for %s: %s", agent_name, exc)
+        return None
+
+
+def _ledger_finish(job_id: Optional[int], ok: bool, payload: Any) -> None:
+    if job_id is None:
+        return
+    try:
+        from core.job_queue import complete_job, fail_job
+
+        if ok:
+            complete_job(job_id, {"result": payload})
+        else:
+            fail_job(job_id, str(payload))
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("Job ledger update failed for job %s: %s", job_id, exc)
+
+
+def _last_message_content(response: Any) -> str:
+    messages = response.get("messages", []) if isinstance(response, dict) else []
+    if not messages:
+        return "No response"
+    content = getattr(messages[-1], "content", messages[-1])
+    if isinstance(content, dict):
+        content = content.get("content", content)
+    return content if isinstance(content, str) else str(content)
+
+
+def _execute_subagent_inline(cfg: Dict[str, Any], query: str) -> AgentResult:
+    """Run a subagent synchronously and return the structured result contract."""
+    name = cfg["name"]
+    cap = cfg.get("capability")
+    version = cap.version if cap is not None else ""
+    job_id = _ledger_start(name, query)
+    start = time.perf_counter()
+
+    try:
+        runnable = cfg.get("runnable")
+        if runnable is None:
+            # Compile lazily and cache on the config so repeat calls reuse it.
+            runnable = create_react_agent(
+                cfg["model"], cfg["tools"], prompt=cfg["system_prompt"]
+            )
+            cfg["runnable"] = runnable
+
+        response = runnable.invoke({"messages": [("user", query)]})
+        summary = _last_message_content(response)
+        duration_ms = int((time.perf_counter() - start) * 1000)
+        _ledger_finish(job_id, ok=True, payload=summary)
+        return make_result(
+            agent=name,
+            status="ok",
+            summary=summary,
+            job_id=job_id,
+            duration_ms=duration_ms,
+            capability_version=version,
+        )
+    except Exception as exc:  # noqa: BLE001 — supervisor must see the failure
+        duration_ms = int((time.perf_counter() - start) * 1000)
+        logger.exception("Subagent '%s' failed during inline execution", name)
+        _ledger_finish(job_id, ok=False, payload=exc)
+        return make_result(
+            agent=name,
+            status="error",
+            summary=f"Subagent {name} failed.",
+            error=str(exc),
+            job_id=job_id,
+            duration_ms=duration_ms,
+            capability_version=version,
+        )
+
+
+def _dispatch_subagent_to_queue(cfg: Dict[str, Any], query: str) -> AgentResult:
+    """Legacy dispatch: enqueue for an external `nexus.py worker` process."""
+    name = cfg["name"]
+    cap = cfg.get("capability")
+    from core.job_queue import enqueue_job
+
+    job_id = enqueue_job(name, {"query": query})
+    return make_result(
+        agent=name,
+        status="queued",
+        summary=(
+            f"Task dispatched to the {name} job queue (job {job_id}). "
+            "An external worker must process it; results are not available "
+            "in this session."
+        ),
+        job_id=job_id,
+        capability_version=cap.version if cap is not None else "",
     )
 
+
+def _make_subagent_tool(cfg: Dict[str, Any]) -> Any:
+    """Wrap a capability tile as a supervisor tool.
+
+    Inline dispatch (the default) executes the subagent synchronously so the
+    ReAct supervisor reasons over real outcomes — the agentic contract. Queue
+    dispatch preserves the external-worker mode (NEXUS_AGENT_DISPATCH=queue
+    or a per-tile override).
+    """
+    name = cfg["name"]
+    description = cfg["description"]
+
     def call_subagent(query: str) -> str:
-        from core.job_queue import enqueue_job
-        job_id = enqueue_job(name, {"query": query})
-        return f"Task asynchronously dispatched to {name} subagent. Job ID: {job_id}. Do not wait for the result."
+        if resolve_dispatch(cfg.get("capability")) == "queue":
+            result = _dispatch_subagent_to_queue(cfg, query)
+        else:
+            result = _execute_subagent_inline(cfg, query)
+        return json.dumps(result, ensure_ascii=False, default=str)
 
     func_name = name.replace("-", "_")
     call_subagent.__name__ = func_name
-    call_subagent.__doc__ = f"Call subagent {name} for task execution. Input query describing target action. Description: {description}"
-    
+    call_subagent.__doc__ = (
+        f"Call subagent {name} for task execution. Input query describing "
+        f"target action. Returns a JSON result envelope (agent, status, "
+        f"summary, error, job_id, duration_ms). Description: {description}"
+    )
+
     return tool(call_subagent)
 
 
@@ -314,6 +356,14 @@ def build_orchestrator(
             base_url=vllm_base,
             api_key="dummy"
         )
+    elif "llamacpp" in model_lower:
+        from langchain_openai import ChatOpenAI
+        llama_base = os.getenv("LLAMACPP_BASE_URL", "http://127.0.0.1:8001/v1")
+        llm = ChatOpenAI(
+            model=model_name or os.getenv("LLAMACPP_MODEL", "local-model"),
+            base_url=llama_base,
+            api_key=os.getenv("LLAMACPP_API_KEY", "sk-no-key-required"),
+        )
     elif "vllm" in model_lower:
         from langchain_openai import ChatOpenAI
         vllm_base = os.getenv("VLLM_BASE_URL", "http://localhost:8000/v1")
@@ -332,11 +382,12 @@ def build_orchestrator(
             base_url=base_url,
         )
 
-    # Supervisor agent compiled using native create_react_agent
+    # Supervisor agent compiled using native create_react_agent.
+    # Prompt is re-rendered so runtime-registered capability tiles are listed.
     orchestrator = create_react_agent(
         llm,
         tools=[neo4j_vector_search, neo4j_query, validate_quality] + subagent_tools,
-        prompt=ORCHESTRATOR_SYSTEM_PROMPT,
+        prompt=_render_orchestrator_prompt(),
     )
     logger.info(f"Built native LangGraph ReAct orchestrator with model={model_name}")
     return orchestrator
@@ -389,6 +440,7 @@ async def run_agentic_pipeline(
                 "openai",
                 "ollama",
                 "vllm",
+                "llamacpp",
             }
             if prefix in known_providers and prefix != "ollama":
                 model = requested
@@ -433,7 +485,7 @@ async def run_agentic_pipeline(
     )
 
     user_message = (
-        f"Conduct a NEXUS enterprise alignment run on: {research_topic}\n\n"
+        f"Conduct a NEXUS cross-domain discovery run on: {research_topic}\n\n"
         f"Project: {project_name}\n"
         f"Strategic Goals:\n"
         + "\n".join(f"  - {g}" for g in research_goals)
@@ -441,7 +493,10 @@ async def run_agentic_pipeline(
         + "Mandatory execution order: call deep-reasoner first for a short plan, "
           "then run stage subagents, and call deep-reasoner again for final QA. "
         + workflow_instruction
-        + " Start by extracting topics for literature search, then ingest local dark data, then process, translate, extract, analyze, and write. "
+        + " Start by ingesting local dark data, then process, translate jargon into "
+        "shared principles, extract the knowledge graph, analyze for cross-silo "
+        "isomorphic mappings, and write findings. Use literature-search only if the "
+        "goals explicitly require external public literature. "
         "Ensure the PRISMA checklist methodology is strictly enforced in all task delegations. Check coverage after extraction and loop back if needed."
     )
 

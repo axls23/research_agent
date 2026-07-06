@@ -245,6 +245,87 @@ class OllamaProvider(LLMProvider):
 
 
 # ---------------------------------------------------------------------------
+# llama.cpp Provider (local, OpenAI-compatible)
+# ---------------------------------------------------------------------------
+
+
+class LlamaCppProvider(LLMProvider):
+    """Local LLM served by llama.cpp's OpenAI-compatible ``/v1`` endpoint.
+
+    llama-server (llama.cpp) exposes a Chat Completions API, so we drive it
+    through ``langchain_openai.ChatOpenAI`` with a dummy key. Stays within the
+    air-gap policy: the base URL points at localhost, never a public cloud.
+    """
+
+    def __init__(
+        self,
+        model: Optional[str] = None,
+        base_url: Optional[str] = None,
+        **kwargs: Any,
+    ):
+        # llama-server ignores the model name for single-model mounts, but
+        # ChatOpenAI requires a non-empty string.
+        self.model = model or os.getenv("LLAMACPP_MODEL", "local-model")
+        raw_base = base_url or os.getenv("LLAMACPP_BASE_URL", "http://127.0.0.1:8001/v1")
+        self.base_url = raw_base if raw_base.endswith("/v1") else raw_base.rstrip("/") + "/v1"
+        self.api_key = os.getenv("LLAMACPP_API_KEY", "sk-no-key-required")
+        self._kwargs = kwargs
+
+    def _get_chat_model(
+        self,
+        *,
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+    ):  # noqa: ANN202
+        from langchain_openai import ChatOpenAI
+
+        model_kwargs = dict(self._kwargs)
+        if temperature is not None:
+            model_kwargs["temperature"] = temperature
+        if max_tokens is not None:
+            model_kwargs["max_tokens"] = max_tokens
+
+        return ChatOpenAI(
+            model=self.model,
+            base_url=self.base_url,
+            api_key=self.api_key,
+            **model_kwargs,
+        )
+
+    async def generate(
+        self,
+        prompt: str,
+        *,
+        system_prompt: Optional[str] = None,
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+        **kwargs: Any,
+    ) -> str:
+        chat = self._get_chat_model(temperature=temperature, max_tokens=max_tokens)
+        messages = []
+        if system_prompt:
+            messages.append(SystemMessage(content=system_prompt))
+        messages.append(HumanMessage(content=prompt))
+
+        result = await chat.ainvoke(messages, **kwargs)
+        return result.content
+
+    async def generate_structured(
+        self,
+        prompt: str,
+        schema: Type[BaseModel],
+        *,
+        system_prompt: Optional[str] = None,
+        temperature: float = 0.3,
+        **kwargs: Any,
+    ) -> BaseModel:
+        return await _parse_structured_with_retry(
+            self.generate, prompt, schema,
+            system_prompt=system_prompt, temperature=temperature, **kwargs,
+        )
+
+
+# ---------------------------------------------------------------------------
 # Native LangChain Provider for Fast-RLM (vLLM)
 # ---------------------------------------------------------------------------
 
@@ -382,12 +463,15 @@ def create_llm_provider(
 
     if provider == "ollama":
         return OllamaProvider(model=model or os.getenv("OLLAMA_MODEL", "qwen2.5:3b"), **kwargs)
+    elif provider in {"llamacpp", "llama_cpp", "llama-cpp", "vllm"}:
+        # vllm and llama.cpp both speak the OpenAI-compatible /v1 API locally.
+        return LlamaCppProvider(model=model, **kwargs)
     elif provider in {"fast_rlm", "fast-rlm"}:
         return FastRLMProvider(model=model or "primary", **kwargs)
     else:
         raise ValueError(
             f"Unknown or unsupported local LLM provider: {provider!r}. "
-            f"Supported: ollama, fast_rlm"
+            f"Supported: ollama, llamacpp, fast_rlm"
         )
 
 

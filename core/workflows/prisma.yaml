@@ -24,6 +24,15 @@ reasoning_guide:
     - "Core principle abstraction and hyperedge linkage"
 
 validation:
+  # Gate for local dark-data ingestion (air-gapped entry stage).
+  # Coverage requirements differ from academic search: one local source
+  # is sufficient, but ingestion must be logged and non-empty.
+  dark_data_coverage:
+    min_databases: 1
+    require_search_log: true
+    min_papers_found: 1
+
+  # Gate for the optional external literature enrichment stage.
   search_coverage:
     min_databases: 3
     require_search_log: true
