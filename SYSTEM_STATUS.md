@@ -1,59 +1,46 @@
 # Research Agent System Status
 
-## ✅ System Components Running
+Last verified: 2026-07-06 (test suite run + manual import checks — see below for method).
 
-### Backend API Server
-- **Status**: ✅ Running
-- **URL**: http://localhost:8000
-- **Health Check**: http://localhost:8000/health
-- **Port**: 8000
-- **CORS**: Configured for frontend origins
+## Test Suite
 
-### Frontend Server
-- **Status**: ✅ Running  
-- **URL**: http://localhost:8080
-- **Main Page**: http://localhost:8080/index.html
-- **Port**: 8080
+- `pytest tests/ --ignore=tests/agents/test_agents.py --ignore=tests/integration/test_deep_agents_e2e.py`
+  → **133 passed, 1 skipped** (full run, ~8 minutes; GLiNER/model-adjacent tests are the slow part).
+- `tests/agents/test_agents.py` fails to collect: imports a top-level `agents/` package that
+  no longer exists (pre-dates the LangGraph multi-agent rewrite). Dead test file.
+- `tests/integration/test_deep_agents_e2e.py` is a manual smoke script, not a pytest suite
+  (it calls `sys.exit(1)` directly). Its subagent-count check is stale — `core/capabilities.py`
+  now registers 8 tiles by design.
 
-### Virtual Environment
-- **Status**: ✅ Activated
-- **Location**: `.venv/`
-- **Dependencies**: Installed
+## Environment
 
-## 🔧 Recent Fixes Applied
+- **No `.venv` in this repo.** Whatever venv earlier notes reference does not currently exist.
+  Confirm which interpreter you're using before running anything
+  (`python -c "import sys; print(sys.executable)"`).
+- **No `.env` file** and no `GROQ_API_KEY` / `NEO4J_PASSWORD` / `OLLAMA_*` set in the shell as
+  of this writing. A live run against Groq or Neo4j will fail auth/connection until these are
+  set. `config/config.yaml` defaults to the local `llamacpp` provider (`gemma-4-E2B-it` on
+  `:8001`), which doesn't need `GROQ_API_KEY`.
+- `api.py` and `core/graph.py` import cleanly with the packages currently installed.
 
-1. **Fixed loguru import error** in `research_agent/utils/logger.py`
-2. **Set Groq API key** in `config/config.yaml` and environment
-3. **Updated model registry** with correct Groq model names
-4. **Improved CORS configuration** for better security
-5. **Started both servers** in virtual environment
+## Servers (manual — start these yourself, nothing runs persistently)
 
-## 🧪 Test Results
+### Backend API (FastAPI)
+- Start: `python api.py`
+- URL: http://localhost:8000, health check at `/health`
+- CORS: allows `http://localhost:3000` only
 
-- **Integration Tests**: ✅ All passed (4/4)
-- **Groq Integration**: ✅ All passed (4/4) 
-- **API Health Check**: ✅ Responding
-- **Project Creation**: ✅ Working
-- **Frontend-Backend Connection**: ✅ Verified
+### Frontend (Next.js)
+- Start: `python run_frontend.py` (or `cd frontend-next && npm run dev`)
+- URL: http://localhost:3000
+- Main route `/` redirects to `/workspace` (NEXUS Workspace — semantic-bridge graph +
+  live discovery-run panel wired to `/health`, `/api/backend/monitor`, `/api/chat/stream`)
 
-## 🚀 How to Use
+## Known gaps
 
-1. **Access the frontend**: http://localhost:8080/index.html
-2. **Create a research project** using the dashboard
-3. **Monitor progress** via real-time updates
-4. **Construct papers** from research results
-
-## 🔍 Troubleshooting
-
-If you see "Failed to fetch":
-1. Ensure both servers are running
-2. Check virtual environment is activated
-3. Verify ports 8000 and 8080 are available
-4. Test connection: http://localhost:8080/test_frontend_backend_connection.html
-
-## 📝 Next Steps
-
-- The system is ready for research tasks
-- All AI models (Groq) are configured and working
-- Paper construction functionality is available
-- Real-time progress tracking is enabled
+- `core/researcher_agent.py` is dead legacy code (old single-agent architecture, pre-dates
+  the LangGraph rewrite) with three unimplemented `# TODO` methods. Nothing imports it.
+- `frontend-next/lib/nexusEngine.ts`'s graph data (silos/principles/bridges) is hardcoded
+  demo content, not live pipeline output.
+- `config/config.yaml`'s `knowledge_graph.backend: networkx | neo4j` flag is unused —
+  nothing in `core/` reads it or imports networkx. Neo4j is the only backend actually wired.
