@@ -4,7 +4,9 @@ Validates:
   - Routing functions return correct path for each state condition
   - Graph compiles for all rigor levels without error
   - Exploratory graph skips validator nodes; prisma/cochrane include them
-  - Entry point is literature_review; terminal edge is audit_formatter → END
+  - Entry point is dark_data_ingestion (local-first NEXUS pipeline);
+    terminal edge is audit_formatter → END
+  - External literature search is opt-in and off by default
 """
 
 import sys
@@ -123,8 +125,9 @@ class TestGraphCompilation:
         graph = build_research_graph(rigor_level="exploratory")
         graph_repr = graph.get_graph()
         node_ids = set(graph_repr.nodes)
-        assert "literature_review" in node_ids
+        assert "dark_data_ingestion" in node_ids
         assert "data_processing" in node_ids
+        assert "rosetta_core" in node_ids
         assert "knowledge_graph" in node_ids
         assert "analysis" in node_ids
         assert "writing" in node_ids
@@ -135,20 +138,42 @@ class TestGraphCompilation:
         graph = build_research_graph(rigor_level="prisma")
         graph_repr = graph.get_graph()
         node_ids = set(graph_repr.nodes)
-        assert "validator_post_lit" in node_ids
+        assert "validator_post_ingest" in node_ids
         assert "validator_post_data" in node_ids
         assert "validator_post_analysis" in node_ids
-        assert "human_post_lit" in node_ids
+        assert "human_post_ingest" in node_ids
         assert "human_post_data" in node_ids
         assert "human_post_analysis" in node_ids
 
-    def test_entry_point_is_literature_review(self):
-        """All graphs start at literature_review."""
+    def test_entry_point_is_dark_data_ingestion(self):
+        """All graphs start at dark_data_ingestion (local-first policy)."""
         graph = build_research_graph(rigor_level="exploratory")
         graph_repr = graph.get_graph()
-        # The __start__ node should have an edge to literature_review
         start_edges = [e for e in graph_repr.edges if e.source == "__start__"]
-        assert any(e.target == "literature_review" for e in start_edges)
+        assert any(e.target == "dark_data_ingestion" for e in start_edges)
+
+    def test_external_search_disabled_by_default(self):
+        """Air-gap policy: no route through literature_review unless opted in."""
+        graph = build_research_graph(rigor_level="exploratory")
+        graph_repr = graph.get_graph()
+        assert not any(e.target == "literature_review" for e in graph_repr.edges)
+        ingest_edges = [
+            e for e in graph_repr.edges if e.source == "dark_data_ingestion"
+        ]
+        assert any(e.target == "data_processing" for e in ingest_edges)
+
+    def test_external_search_opt_in_routes_through_literature_review(self):
+        """When enabled, literature_review runs after ingestion as enrichment."""
+        graph = build_research_graph(
+            rigor_level="exploratory", enable_external_search=True
+        )
+        graph_repr = graph.get_graph()
+        ingest_edges = [
+            e for e in graph_repr.edges if e.source == "dark_data_ingestion"
+        ]
+        assert any(e.target == "literature_review" for e in ingest_edges)
+        lit_edges = [e for e in graph_repr.edges if e.source == "literature_review"]
+        assert any(e.target == "data_processing" for e in lit_edges)
 
     def test_terminal_edge_audit_formatter_to_end(self):
         """All graphs end with audit_formatter → __end__."""

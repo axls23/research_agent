@@ -56,7 +56,7 @@ class TestOrchestratorBuilder:
         assert "analysis" in names
         assert "writing" in names
 
-    @patch("langgraph.prebuilt.create_react_agent")
+    @patch("core.orchestrator.create_react_agent")
     def test_build_orchestrator_compiles_graph(self, mock_create_react_agent):
         mock_create_react_agent.return_value = MagicMock()
         orchestrator = build_orchestrator(model="ollama:qwen2.5:3b")

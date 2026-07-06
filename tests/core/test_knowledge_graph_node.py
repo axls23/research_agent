@@ -156,6 +156,7 @@ class TestConstants:
             "result",
             "limitation",
             "implication",
+            "core_principle",
         }
         assert PRISMA_ENTITY_TYPES == expected
 
@@ -296,7 +297,7 @@ class TestLLMStructuredExtraction:
             )
         )
 
-        entities, relations = await extract_prisma_structured(
+        entities, relations, hyperedges = await extract_prisma_structured(
             "Sample paper text", "paper-001", [], mock_llm
         )
 
@@ -336,7 +337,7 @@ class TestLLMStructuredExtraction:
             {"text": "EMBASE", "label": "information source", "score": "0.88"},
         ]
 
-        entities, relations = await extract_prisma_structured(
+        entities, relations, hyperedges = await extract_prisma_structured(
             "text", "p1", spans, mock_llm
         )
 
@@ -351,11 +352,12 @@ class TestLLMStructuredExtraction:
         mock_llm = AsyncMock()
         mock_llm.generate_structured = AsyncMock(side_effect=Exception("API Error"))
 
-        entities, relations = await extract_prisma_structured(
+        entities, relations, hyperedges = await extract_prisma_structured(
             "text", "p1", [], mock_llm
         )
         assert entities == []
         assert relations == []
+        assert hyperedges == []
 
 
 # ---------------------------------------------------------------------------
@@ -386,7 +388,9 @@ class TestCombinedExtraction:
             )
         )
 
-        entities, relations = await extract_prisma_entities("text", "p1", llm=mock_llm)
+        entities, relations, hyperedges = await extract_prisma_entities(
+            "text", "p1", llm=mock_llm
+        )
 
         # LLM entities are primary; GLiNER fills gaps
         texts = [e["text"].lower() for e in entities]
@@ -407,11 +411,14 @@ class TestCombinedExtraction:
         ]
         mock_get_model.return_value = mock_model
 
-        entities, relations = await extract_prisma_entities("text", "p1", llm=None)
+        entities, relations, hyperedges = await extract_prisma_entities(
+            "text", "p1", llm=None
+        )
 
         assert len(entities) == 1
         assert entities[0]["label"] == "objective"
         assert relations == []  # No relations without LLM
+        assert hyperedges == []  # No hyperedges without LLM
 
 
 # ---------------------------------------------------------------------------

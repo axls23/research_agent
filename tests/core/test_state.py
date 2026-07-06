@@ -63,19 +63,29 @@ class TestMakeInitialState:
             "research_goals",
             "rigor_level",
             "current_node",
+            "current_gate_name",
             "last_validation_passed",
+            "human_decision",
+            "last_failed_node",
+            "retry_target",
+            "max_iterations_reached",
             "abort",
             "search_queries",
             "databases_searched",
+            "search_date_range",
+            "grey_literature_searched",
             "papers_found",
             "papers_screened",
             "papers_included",
             "papers",
             "chunks",
             "total_tokens_extracted",
+            "dual_extraction_performed",
             "knowledge_entities",
             "knowledge_graph_id",
             "knowledge_graph_summary",
+            "hyperedges",
+            "isomorphic_clusters",
             "analysis_results",
             "outline",
             "draft_sections",
@@ -112,6 +122,14 @@ class TestMakeInitialState:
         assert state["prisma_flow_diagram"] is None
         assert state["audit_export_path"] is None
         assert state["draft_sections"] == {}
+        assert state["hyperedges"] == []
+        assert state["isomorphic_clusters"] == []
+        assert state["human_decision"] is None
+        assert state["retry_target"] is None
+        assert state["max_iterations_reached"] is False
+        assert state["grey_literature_searched"] is False
+        assert state["search_date_range"] is None
+        assert state["dual_extraction_performed"] is False
 
     @pytest.mark.parametrize("rigor", ["exploratory", "prisma", "cochrane"])
     def test_rigor_level_propagation(self, rigor):
@@ -202,10 +220,14 @@ class TestAppendAudit:
         log2 = append_audit(state, "a", "x", {"q": "beta"}, "s")
         assert log1[0]["input_hash"] != log2[0]["input_hash"]
 
-    def test_provenance_defaults_to_empty_dict(self):
+    def test_provenance_defaults_when_not_provided(self):
         state = _make_test_state()
         log = append_audit(state, "a", "x", {}, "s")
-        assert log[0]["provenance"] == {}
+        assert log[0]["provenance"] == {
+            "model_tier": None,
+            "model": None,
+            "override_reason": None,
+        }
 
     def test_provenance_passed_through(self):
         state = _make_test_state()
