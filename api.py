@@ -1,6 +1,7 @@
 import os
 import json
 import asyncio
+import sqlite3
 import uuid
 import re
 from collections import deque
@@ -8,13 +9,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 from urllib import error, request
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 
 from core.graph import run_research_pipeline
+from core.capabilities import all_capabilities, resolve_dispatch
+from core.job_queue import DB_PATH as JOB_QUEUE_DB_PATH, enqueue_job, complete_job, fail_job
+from core.tools.extraction_tools import extract_paper_text, chunk_text
 
 load_dotenv()
 
@@ -49,11 +53,42 @@ class AgentStep(BaseModel):
     action: str
     color: str
 
+
+class Hyperedge(BaseModel):
+    hyperedge_id: str
+    principle_name: str
+    member_entity_ids: List[str] = Field(default_factory=list)
+    domain_jargon: List[str] = Field(default_factory=list)
+    weight: float = 0.0
+    paper_ids: List[str] = Field(default_factory=list)
+    checklist_tags: List[str] = Field(default_factory=list)
+    source_entity_labels: List[str] = Field(default_factory=list)
+
+
+class IsomorphicCluster(BaseModel):
+    cluster_id: str
+    shared_principle: str
+    hyperedge_ids: List[str] = Field(default_factory=list)
+    domains: List[str] = Field(default_factory=list)
+    similarity_score: float = 0.0
+    actionable_insight: Optional[str] = None
+
+
+class KnowledgeEntity(BaseModel):
+    entity_id: str
+    label: str
+    text: str
+    paper_ids: List[str] = Field(default_factory=list)
+
+
 class ChatResponse(BaseModel):
     content: str
     citations: List[str] = Field(default_factory=list)
     sources: List[ChatSource] = Field(default_factory=list)
     agentSteps: List[AgentStep] = Field(default_factory=list)
+    hyperedges: List[Hyperedge] = Field(default_factory=list)
+    isomorphicClusters: List[IsomorphicCluster] = Field(default_factory=list)
+    knowledgeEntities: List[KnowledgeEntity] = Field(default_factory=list)
 
 
 _NODE_TO_STAGE = {
@@ -190,11 +225,20 @@ def _build_chat_payload(result_state: Dict[str, Any]) -> Dict[str, Any]:
                 }
             )
 
+    # Extract NEXUS hypergraph/isomorphic-mapping data (additive; does not
+    # change the existing content/citations/sources/agentSteps shape).
+    hyperedges = result_state.get("hyperedges", []) or []
+    isomorphic_clusters = result_state.get("isomorphic_clusters", []) or []
+    knowledge_entities = result_state.get("knowledge_entities", []) or []
+
     return {
         "content": final_text,
         "citations": citations,
         "sources": sources,
         "agentSteps": agent_steps,
+        "hyperedges": hyperedges,
+        "isomorphicClusters": isomorphic_clusters,
+        "knowledgeEntities": knowledge_entities,
     }
 
 
@@ -547,6 +591,97 @@ async def backend_monitor(lines: int = 120):
     }
 
 
+@app.get("/api/capabilities")
+async def get_capabilities():
+    """Expose the real mosaic capability registry (core.capabilities) to the frontend."""
+    capabilities = []
+    for cap in all_capabilities():
+        capabilities.append(
+            {
+                "name": cap.name,
+                "description": cap.description,
+                "tool_names": list(cap.tool_names),
+                "model_tier": cap.model_tier,
+                "dispatch": resolve_dispatch(cap),
+                "catalog_note": cap.catalog_note,
+                "version": cap.version,
+            }
+        )
+    return {"capabilities": capabilities}
+
+
+def _row_to_job_dict(row: tuple) -> Dict[str, Any]:
+    job_id, agent_name, payload, status, created_at, updated_at, result = row
+
+    def _try_json(raw: Optional[str]) -> Any:
+        if raw is None:
+            return None
+        try:
+            return json.loads(raw)
+        except (TypeError, ValueError):
+            return raw
+
+    return {
+        "id": job_id,
+        "agent_name": agent_name,
+        "status": status,
+        "payload": _try_json(payload),
+        "result": _try_json(result),
+        "created_at": created_at,
+        "updated_at": updated_at,
+    }
+
+
+@app.get("/api/jobs")
+async def list_jobs(agent_name: Optional[str] = None, limit: int = 50):
+    if not Path(JOB_QUEUE_DB_PATH).exists():
+        return {"jobs": []}
+
+    try:
+        with sqlite3.connect(JOB_QUEUE_DB_PATH) as conn:
+            cursor = conn.cursor()
+            if agent_name:
+                cursor.execute(
+                    "SELECT id, agent_name, payload, status, created_at, updated_at, result "
+                    "FROM jobs WHERE agent_name = ? ORDER BY created_at DESC LIMIT ?",
+                    (agent_name, limit),
+                )
+            else:
+                cursor.execute(
+                    "SELECT id, agent_name, payload, status, created_at, updated_at, result "
+                    "FROM jobs ORDER BY created_at DESC LIMIT ?",
+                    (limit,),
+                )
+            rows = cursor.fetchall()
+    except sqlite3.Error:
+        return {"jobs": []}
+
+    return {"jobs": [_row_to_job_dict(row) for row in rows]}
+
+
+@app.get("/api/jobs/{job_id}")
+async def get_job(job_id: int):
+    if not Path(JOB_QUEUE_DB_PATH).exists():
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    try:
+        with sqlite3.connect(JOB_QUEUE_DB_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT id, agent_name, payload, status, created_at, updated_at, result "
+                "FROM jobs WHERE id = ?",
+                (job_id,),
+            )
+            row = cursor.fetchone()
+    except sqlite3.Error:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    if row is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    return _row_to_job_dict(row)
+
+
 @app.get("/api/chat")
 async def chat_endpoint_get():
     return {
@@ -675,6 +810,9 @@ async def chat_stream_endpoint(req: ChatRequest):
                 "citations": payload.get("citations", []),
                 "sources": payload.get("sources", []),
                 "agentSteps": payload.get("agentSteps", []),
+                "hyperedges": payload.get("hyperedges", []),
+                "isomorphicClusters": payload.get("isomorphicClusters", []),
+                "knowledgeEntities": payload.get("knowledgeEntities", []),
             },
         )
         yield _sse("done", {"ok": True})
@@ -695,6 +833,105 @@ async def chat_endpoint(req: ChatRequest):
         return ChatResponse(**payload)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+def _persist_chunks_to_neo4j(chunks: List[Dict[str, Any]], paper_id: str) -> Dict[str, Any]:
+    """Persist Chunk nodes only (no PRISMA entities/hyperedges — that needs the
+    LLM-based extractor, which is out of scope for a raw upload). Mirrors the
+    MERGE pattern used by knowledge_graph_node._persist_to_neo4j for chunks.
+    """
+    neo4j_uri = os.environ.get("NEO4J_URI", "bolt://localhost:7687")
+    neo4j_user = os.environ.get("NEO4J_USER", "neo4j")
+    neo4j_password = os.environ.get("NEO4J_PASSWORD", "")
+
+    if not neo4j_password:
+        return {"neo4j_status": "skipped", "reason": "no credentials"}
+
+    try:
+        from neo4j import GraphDatabase
+
+        driver = GraphDatabase.driver(neo4j_uri, auth=(neo4j_user, neo4j_password))
+        nodes_created = 0
+
+        with driver.session() as session:
+            session.run(
+                "MERGE (p:Paper {paper_id: $pid}) "
+                "ON CREATE SET p.created_at = datetime()",
+                pid=paper_id,
+            )
+
+            for c in chunks:
+                c_text = c.get("text")
+                c_emb = c.get("embedding")
+                if c_text and c_emb:
+                    session.run(
+                        "MERGE (ch:Chunk {text: $text}) "
+                        "ON CREATE SET ch.paper_id = $pid, ch.embedding = $emb "
+                        "ON MATCH SET ch.embedding = $emb",
+                        text=c_text, pid=c.get("paper_id", paper_id), emb=c_emb,
+                    )
+                    nodes_created += 1
+
+        driver.close()
+        return {"neo4j_status": "success", "nodes_created": nodes_created}
+    except Exception as e:
+        return {"neo4j_status": "error", "error": str(e)}
+
+
+@app.post("/api/upload")
+async def upload_endpoint(file: UploadFile = File(...)):
+    upload_dir = Path("uploads")
+    upload_dir.mkdir(parents=True, exist_ok=True)
+
+    filename = file.filename or f"upload_{uuid.uuid4().hex[:8]}"
+    dest_path = upload_dir / filename
+
+    contents = await file.read()
+    with open(dest_path, "wb") as f:
+        f.write(contents)
+
+    paper_id = Path(filename).stem
+    job_id = enqueue_job("upload-ingest", {"filename": filename, "path": str(dest_path)})
+
+    try:
+        extraction = await extract_paper_text(str(dest_path))
+        full_text = extraction.get("full_text", "")
+        chunks = chunk_text(full_text, paper_id) if full_text else []
+    except Exception as e:
+        fail_job(job_id, str(e))
+        raise HTTPException(status_code=500, detail=f"Extraction/chunking failed: {e}")
+
+    # Embedding and Neo4j persistence are best-effort: degrade gracefully
+    # (matching _check_ollama()/_persist_to_neo4j() conventions) rather than
+    # failing the whole upload if the model or database is unavailable.
+    embed_status = "skipped"
+    if chunks:
+        try:
+            from sentence_transformers import SentenceTransformer
+
+            embed_model = SentenceTransformer("allenai/specter2_base")
+            chunk_texts = [c["text"] for c in chunks]
+            embeddings = embed_model.encode(chunk_texts, show_progress_bar=False)
+            for c, emb in zip(chunks, embeddings):
+                c["embedding"] = emb.tolist()
+            embed_status = "success"
+        except Exception as e:
+            embed_status = f"error: {e}"
+
+    neo4j_result = _persist_chunks_to_neo4j(chunks, paper_id)
+
+    result = {
+        "filename": filename,
+        "paper_id": paper_id,
+        "chunk_count": len(chunks),
+        "extraction_method": extraction.get("method"),
+        "embedding_status": embed_status,
+        "neo4j": neo4j_result,
+    }
+    complete_job(job_id, result)
+
+    return {"job_id": job_id, "filename": filename, "status": "COMPLETED"}
+
 
 if __name__ == "__main__":
     import uvicorn
