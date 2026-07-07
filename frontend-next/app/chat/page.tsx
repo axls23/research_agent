@@ -5,14 +5,11 @@ import { motion, AnimatePresence } from "framer-motion";
 import ReactMarkdown from "react-markdown";
 import {
     Send,
-    FileText,
     Bot,
     User,
     ChevronDown,
     ChevronRight,
-    Search,
     Brain,
-    PenLine,
     BarChart2,
     BookOpen,
     Sparkles,
@@ -70,48 +67,6 @@ interface PersistedChatSession {
     input: string;
 }
 
-/* ────────────────── Mock Data ────────────────── */
-const MOCK_DOCS = [
-    "Attention Is All You Need.pdf",
-    "REALM: Retrieval-Augmented Language Model Pre-Training.pdf",
-    "Agentic RAG Survey 2024.pdf",
-    "Knowledge Graphs + LLMs.pdf",
-];
-
-const MOCK_SOURCES: SourceItem[] = [
-    { title: "Agentic RAG Survey 2024", page: 14, score: 0.97, excerpt: "Agentic RAG introduces autonomous multi-step reasoning where agents iteratively retrieve and refine..." },
-    { title: "Attention Is All You Need", page: 3, score: 0.91, excerpt: "The Transformer architecture relies solely on attention mechanisms, dispensing with recurrence..." },
-    { title: "REALM Pre-Training", page: 7, score: 0.88, excerpt: "Retrieval-augmented language model pre-training opens-books language models with knowledge retrieval..." },
-];
-
-const AGENT_STEPS: AgentStep[] = [
-    { agent: "Planner", action: "Decomposing query into sub-tasks", color: "violet" },
-    { agent: "Retriever", action: "Searching vector DB (k=8)", color: "cyan" },
-    { agent: "Retriever", action: "Hybrid BM25 + dense reranking", color: "cyan" },
-    { agent: "Generator", action: "Synthesizing with citations", color: "green" },
-];
-
-const DEMO_RESPONSE = `## Agentic RAG Overview
-
-**Agentic RAG** extends traditional RAG pipelines by introducing **autonomous, multi-step reasoning agents** that can:
-
-1. **Decompose** complex queries into sub-tasks
-2. **Iteratively retrieve** from multiple sources
-3. **Self-correct** based on retrieved evidence
-4. **Generate** grounded, cited answers
-
-### Key Differences from Naïve RAG
-
-| Aspect | Naïve RAG | Agentic RAG |
-|--------|-----------|-------------|
-| Retrieval | Single-shot | Iterative |
-| Planning | None | Multi-step |
-| Memory | None | Persistent |
-| Citations | Optional | Required |
-
-> Studies show Agentic RAG improves answer accuracy by **~35%** on complex multi-hop questions. [1][2]
-`;
-
 /* ────────────────── Component ────────────────── */
 export default function ChatPage() {
     const [messages, setMessages] = useState<Message[]>([
@@ -127,11 +82,37 @@ export default function ChatPage() {
     const [expandedSteps, setExpandedSteps] = useState<string | null>(null);
     const [sources, setSources] = useState<SourceItem[]>([]);
     const [sessionHydrated, setSessionHydrated] = useState(false);
+    const [backendStatus, setBackendStatus] = useState<"checking" | "online" | "offline">("checking");
     const bottomRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
         bottomRef.current?.scrollIntoView({ behavior: "smooth" });
     }, [messages, isTyping]);
+
+    useEffect(() => {
+        let cancelled = false;
+
+        const probeBackend = async () => {
+            try {
+                const res = await fetch(`${API_BASE_URL}/health`);
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const data = await res.json();
+                if (!cancelled) {
+                    setBackendStatus(data?.status === "ok" ? "online" : "offline");
+                }
+            } catch {
+                if (!cancelled) setBackendStatus("offline");
+            }
+        };
+
+        probeBackend();
+        const interval = setInterval(probeBackend, 15000);
+
+        return () => {
+            cancelled = true;
+            clearInterval(interval);
+        };
+    }, []);
 
     useEffect(() => {
         try {
@@ -347,6 +328,11 @@ export default function ChatPage() {
         }
     };
 
+    const latestAgentSteps = [...messages]
+        .reverse()
+        .find((m) => m.role === "assistant" && m.agentSteps && m.agentSteps.length > 0)
+        ?.agentSteps;
+
     return (
         <div
             className="h-[calc(100vh-4rem)] flex overflow-hidden"
@@ -357,49 +343,30 @@ export default function ChatPage() {
                 className="w-64 xl:w-72 flex-shrink-0 flex flex-col border-r overflow-y-auto hidden md:flex"
                 style={{ borderColor: "var(--border-card)", background: "var(--bg-secondary)" }}
             >
-                {/* Documents */}
-                <div className="p-4 border-b" style={{ borderColor: "var(--border-card)" }}>
-                    <p className="text-xs font-semibold uppercase tracking-wider mb-3" style={{ color: "var(--text-muted)" }}>
-                        Indexed Documents
-                    </p>
-                    <ul className="space-y-1.5">
-                        {MOCK_DOCS.map((doc) => (
-                            <li
-                                key={doc}
-                                className="flex items-center gap-2.5 px-3 py-2.5 rounded-lg cursor-pointer transition-colors"
-                                style={{ color: "var(--text-secondary)" }}
-                                onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.04)")}
-                                onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-                            >
-                                <FileText className="w-3.5 h-3.5 flex-shrink-0" style={{ color: "var(--accent-indigo)" }} />
-                                <span className="text-xs truncate">{doc}</span>
-                            </li>
-                        ))}
-                    </ul>
-                </div>
-
                 {/* Agent Activity Log */}
                 <div className="p-4 flex-1">
                     <p className="text-xs font-semibold uppercase tracking-wider mb-3" style={{ color: "var(--text-muted)" }}>
                         Agent Activity
                     </p>
-                    <div className="space-y-2">
-                        {[
-                            { icon: Brain, label: "Planner", status: "Idle", color: "violet" as const },
-                            { icon: Search, label: "Retriever", status: "Ready", color: "cyan" as const },
-                            { icon: PenLine, label: "Generator", status: "Standby", color: "green" as const },
-                        ].map(({ icon: Icon, label, status, color }) => (
-                            <div
-                                key={label}
-                                className="flex items-center gap-2.5 px-3 py-2 rounded-lg"
-                                style={{ background: "rgba(255,255,255,0.03)" }}
-                            >
-                                <Icon className="w-3.5 h-3.5" style={{ color: `var(--accent-${color === "violet" ? "violet" : color === "cyan" ? "cyan" : "cyan"})` }} />
-                                <span className="text-xs flex-1" style={{ color: "var(--text-secondary)" }}>{label}</span>
-                                <Badge color={color} className="text-[10px] px-1.5 py-0">{status}</Badge>
-                            </div>
-                        ))}
-                    </div>
+                    {latestAgentSteps && latestAgentSteps.length > 0 ? (
+                        <div className="space-y-2">
+                            {latestAgentSteps.map((step, i) => (
+                                <div
+                                    key={`${step.agent}-${i}`}
+                                    className="flex items-center gap-2.5 px-3 py-2 rounded-lg"
+                                    style={{ background: "rgba(255,255,255,0.03)" }}
+                                >
+                                    <Brain className="w-3.5 h-3.5" style={{ color: "var(--accent-violet, #a78bfa)" }} />
+                                    <span className="text-xs flex-1 truncate" style={{ color: "var(--text-secondary)" }}>{step.action}</span>
+                                    <Badge color={step.color} className="text-[10px] px-1.5 py-0">{step.agent}</Badge>
+                                </div>
+                            ))}
+                        </div>
+                    ) : (
+                        <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+                            No agent activity yet. Send a message to see live steps here.
+                        </p>
+                    )}
                 </div>
             </aside>
 
@@ -418,7 +385,9 @@ export default function ChatPage() {
                     </div>
                     <div>
                         <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Research Assistant</p>
-                        <p className="text-xs" style={{ color: "var(--text-muted)" }}>Agentic RAG · {MOCK_DOCS.length} documents indexed</p>
+                        <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+                            Agentic RAG · Backend {backendStatus === "checking" ? "checking…" : backendStatus === "online" ? "online" : "offline"}
+                        </p>
                     </div>
                     <div
                         className="ml-2 px-2 py-1 rounded-md text-[10px]"
@@ -431,8 +400,20 @@ export default function ChatPage() {
                         {useHarness ? "Harness Mode" : "Chat Mode"}
                     </div>
                     <div className="ml-auto flex items-center gap-2">
-                        <span className="w-2 h-2 rounded-full" style={{ background: "#4ade80" }} />
-                        <span className="text-xs" style={{ color: "var(--text-muted)" }}>Online</span>
+                        <span
+                            className="w-2 h-2 rounded-full"
+                            style={{
+                                background:
+                                    backendStatus === "online"
+                                        ? "#4ade80"
+                                        : backendStatus === "offline"
+                                            ? "#f87171"
+                                            : "#facc15",
+                            }}
+                        />
+                        <span className="text-xs" style={{ color: "var(--text-muted)" }}>
+                            {backendStatus === "online" ? "Online" : backendStatus === "offline" ? "Offline" : "Checking…"}
+                        </span>
                     </div>
                 </div>
 
@@ -729,7 +710,6 @@ export default function ChatPage() {
                     </p>
                     <div className="space-y-2">
                         {[
-                            { label: "Tokens used", value: "2,847" },
                             { label: "Docs retrieved", value: sources.length.toString() },
                             { label: "Messages", value: messages.length.toString() },
                         ].map(({ label, value }) => (
