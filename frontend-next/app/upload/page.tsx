@@ -22,7 +22,32 @@ interface UploadedFile {
     size: number;
     status: FileStatus;
     progress: number;
+    jobId?: number;
+    errorMessage?: string;
 }
+
+type JobStatus = "PENDING" | "IN_PROGRESS" | "COMPLETED" | "FAILED";
+
+interface UploadResponse {
+    job_id: number;
+    filename: string;
+    status: JobStatus;
+    error?: string;
+    detail?: string;
+}
+
+interface JobResponse {
+    id: number;
+    agent_name: string;
+    status: JobStatus;
+    payload?: unknown;
+    result?: { error?: string;[key: string]: unknown } | null;
+    created_at: number;
+    updated_at: number;
+}
+
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
+const POLL_MS = 1500;
 
 function formatBytes(bytes: number) {
     if (bytes < 1024) return `${bytes} B`;
@@ -38,34 +63,96 @@ const statusConfig: Record<FileStatus, { label: string; color: "cyan" | "amber" 
     error: { label: "Error", color: "rose" },
 };
 
-function simulateUpload(
-    file: UploadedFile,
+async function pollJob(
+    jobId: number,
+    id: string,
     onUpdate: (id: string, patch: Partial<UploadedFile>) => void
 ) {
-    // Stage 1: Uploading
-    onUpdate(file.id, { status: "uploading", progress: 0 });
-    let progress = 0;
-    const uploadInterval = setInterval(() => {
-        progress += Math.random() * 18 + 8;
-        if (progress >= 100) {
-            clearInterval(uploadInterval);
-            onUpdate(file.id, { status: "indexing", progress: 100 });
+    const poll = async () => {
+        try {
+            const resp = await fetch(`${API_BASE_URL}/api/jobs/${jobId}`, { cache: "no-store" });
+            if (!resp.ok) {
+                throw new Error(`HTTP ${resp.status}`);
+            }
+            const job = (await resp.json()) as JobResponse;
 
-            // Stage 2: Indexing
-            let ndx = 0;
-            const indexInterval = setInterval(() => {
-                ndx += Math.random() * 20 + 10;
-                if (ndx >= 100) {
-                    clearInterval(indexInterval);
-                    onUpdate(file.id, { status: "embedded", progress: 100 });
-                } else {
-                    onUpdate(file.id, { progress: ndx });
-                }
-            }, 200);
-        } else {
-            onUpdate(file.id, { progress });
+            if (job.status === "COMPLETED") {
+                onUpdate(id, { status: "embedded", progress: 100 });
+                return;
+            }
+            if (job.status === "FAILED") {
+                const message =
+                    (job.result && typeof job.result.error === "string" && job.result.error) ||
+                    "Job failed during processing";
+                onUpdate(id, { status: "error", errorMessage: message, progress: 0 });
+                return;
+            }
+            // PENDING or IN_PROGRESS
+            onUpdate(id, { status: "indexing", progress: 75 });
+            setTimeout(poll, POLL_MS);
+        } catch (e) {
+            onUpdate(id, {
+                status: "error",
+                errorMessage: e instanceof Error ? e.message : "Failed to check job status",
+                progress: 0,
+            });
         }
-    }, 150);
+    };
+
+    setTimeout(poll, POLL_MS);
+}
+
+async function uploadFile(
+    file: UploadedFile,
+    rawFile: File,
+    onUpdate: (id: string, patch: Partial<UploadedFile>) => void
+) {
+    onUpdate(file.id, { status: "uploading", progress: 50 });
+
+    let resp: Response;
+    try {
+        const formData = new FormData();
+        formData.append("file", rawFile);
+        resp = await fetch(`${API_BASE_URL}/api/upload`, {
+            method: "POST",
+            body: formData,
+        });
+    } catch (e) {
+        onUpdate(file.id, {
+            status: "error",
+            errorMessage: e instanceof Error ? e.message : "Network error during upload",
+            progress: 0,
+        });
+        return;
+    }
+
+    let body: UploadResponse | null = null;
+    try {
+        body = (await resp.json()) as UploadResponse;
+    } catch {
+        body = null;
+    }
+
+    if (!resp.ok) {
+        const message = body?.error || body?.detail || `Upload failed (HTTP ${resp.status})`;
+        onUpdate(file.id, { status: "error", errorMessage: message, progress: 0 });
+        return;
+    }
+
+    if (!body) {
+        onUpdate(file.id, { status: "error", errorMessage: "Upload returned an empty response", progress: 0 });
+        return;
+    }
+
+    onUpdate(file.id, { jobId: body.job_id });
+
+    if (body.status === "COMPLETED") {
+        onUpdate(file.id, { status: "embedded", progress: 100 });
+        return;
+    }
+
+    onUpdate(file.id, { status: "indexing", progress: 75 });
+    pollJob(body.job_id, file.id, onUpdate);
 }
 
 export default function UploadPage() {
@@ -83,9 +170,9 @@ export default function UploadPage() {
                 progress: 0,
             };
             setFiles((prev) => [...prev, newFile]);
-            setTimeout(() => simulateUpload(newFile, (id, patch) => {
+            uploadFile(newFile, f, (id, patch) => {
                 setFiles((prev) => prev.map((x) => (x.id === id ? { ...x, ...patch } : x)));
-            }), 100);
+            });
         });
     };
 
@@ -212,6 +299,7 @@ export default function UploadPage() {
                             {files.map((file) => {
                                 const cfg = statusConfig[file.status];
                                 const isComplete = file.status === "embedded";
+                                const isError = file.status === "error";
                                 const isProcessing = file.status === "uploading" || file.status === "indexing";
 
                                 return (
@@ -230,6 +318,8 @@ export default function UploadPage() {
                                         >
                                             {isComplete ? (
                                                 <CheckCircle2 className="w-5 h-5" style={{ color: "#4ade80" }} />
+                                            ) : isError ? (
+                                                <X className="w-5 h-5" style={{ color: "#f87171" }} />
                                             ) : isProcessing ? (
                                                 <Loader2 className="w-5 h-5 animate-spin" style={{ color: "var(--accent-cyan)" }} />
                                             ) : (
@@ -260,7 +350,9 @@ export default function UploadPage() {
                                                         style={{
                                                             background: isComplete
                                                                 ? "linear-gradient(90deg, #4ade80, #22d3ee)"
-                                                                : "linear-gradient(90deg, #6366f1, #22d3ee)",
+                                                                : isError
+                                                                    ? "linear-gradient(90deg, #f87171, #fb923c)"
+                                                                    : "linear-gradient(90deg, #6366f1, #22d3ee)",
                                                         }}
                                                         animate={{ width: `${file.progress}%` }}
                                                         transition={{ duration: 0.3 }}
@@ -273,10 +365,15 @@ export default function UploadPage() {
                                             <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>
                                                 {formatBytes(file.size)}
                                             </p>
+                                            {isError && file.errorMessage && (
+                                                <p className="text-xs mt-1" style={{ color: "#f87171" }}>
+                                                    {file.errorMessage}
+                                                </p>
+                                            )}
                                         </div>
 
                                         {/* Remove */}
-                                        {isComplete && (
+                                        {(isComplete || isError) && (
                                             <button
                                                 onClick={() => removeFile(file.id)}
                                                 className="p-1.5 rounded-lg transition-colors"
