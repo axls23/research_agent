@@ -1,9 +1,15 @@
 /* ============================================================================
  * lib/nexusEngine.ts
  * NEXUS Semantic Bridge — framework-agnostic graph engine.
- * Data model mirrors core/orchestrator.py (subagents) + the documented
- * isomorphic-mapping scenarios. Physics + canvas render + interaction.
- * Consumed by app/page.tsx. No React in here.
+ * Data model mirrors core/orchestrator.py (subagents) + the real discovery-run
+ * payloads returned by the backend (hyperedges / isomorphicClusters in the
+ * /api/chat/stream `meta` SSE event). Physics + canvas render + interaction.
+ * Consumed by app/workspace/page.tsx. No React in here.
+ *
+ * NOTE: the graph starts EMPTY. There is no standalone "get current graph"
+ * endpoint — hypergraph data only comes back tied to a specific discovery run.
+ * silos/principles/bridges accumulate at runtime as real discovery runs
+ * complete (see GraphEngine.setData, called from page.tsx after each run).
  * ========================================================================== */
 
 export type Tier = "fast" | "deep";
@@ -34,75 +40,22 @@ export interface EngineHandlers {
   onSelect: (id: string | null, kind: "mapping" | "principle" | "none") => void;
 }
 
-/* ── Static domain + pipeline data ─────────────────────────────────────── */
-export const SILOS: Silo[] = [
-  { id: "eng",    name: "Engineering",     color: "#e0a34e", meta: "CAD · telemetry · BOM",  files: "4.2 TB", ingest: 0.94 },
-  { id: "bio",    name: "Biomimicry",      color: "#5fbf8f", meta: "assays · field studies", files: "2.1 TB", ingest: 0.88 },
-  { id: "aero",   name: "Aerospace",       color: "#5b9bd8", meta: "CFD · flight logs",      files: "6.8 TB", ingest: 0.97 },
-  { id: "earth",  name: "Earth Science",   color: "#4fb8c4", meta: "climate grids · sensors",files: "5.3 TB", ingest: 0.79 },
-  { id: "crypto", name: "Cryptography",    color: "#a889e0", meta: "proofs · protocols",     files: "1.4 TB", ingest: 0.91 },
-  { id: "binf",   name: "Bioinformatics",  color: "#e0708f", meta: "FASTQ · alignments",     files: "4.6 TB", ingest: 0.83 },
-  { id: "neuro",  name: "Neuroscience",    color: "#e08560", meta: "fMRI · connectomes",     files: "2.4 TB", ingest: 0.72 },
-  { id: "cs",     name: "Computer Science",color: "#7c8ce0", meta: "models · weights",       files: "1.6 TB", ingest: 0.90 },
-];
+/* ── Palette for silos synthesized from real domain names ────────────────── */
+const SILO_PALETTE = ["#e0a34e", "#5fbf8f", "#5b9bd8", "#4fb8c4", "#a889e0", "#e0708f", "#e08560", "#7c8ce0"];
+function colorForDomain(existingCount: number): string {
+  return SILO_PALETTE[existingCount % SILO_PALETTE.length];
+}
 
-export const PRINCIPLES: Principle[] = [
-  { pid: "eng0",   silo: "eng",   label: "Thermal Runaway Dispersion",   desc: "How heat propagates and cascades through densely packed battery cells during failure." },
-  { pid: "eng1",   silo: "eng",   label: "Cell Load Balancing",          desc: "Distribution of electrical and thermal load across a multi-cell pack." },
-  { pid: "bio0",   silo: "bio",   label: "Mycelial Heat Dispersion",     desc: "Fungal networks distributing heat and nutrients through fractal micro-channels." },
-  { pid: "bio1",   silo: "bio",   label: "Vascular Branching Flow",      desc: "Biological branching that minimises transport cost across a distribution tree." },
-  { pid: "aero0",  silo: "aero",  label: "Navier-Stokes Turbulence",     desc: "High-fidelity turbulence modelling of momentum transfer in fluid boundary layers." },
-  { pid: "aero1",  silo: "aero",  label: "Boundary Layer Control",       desc: "Active management of the thin fluid layer adjacent to a moving surface." },
-  { pid: "earth0", silo: "earth", label: "Atmospheric Grid Resolution",  desc: "Discretisation granularity limiting the fidelity of climate simulations." },
-  { pid: "earth1", silo: "earth", label: "Ocean Eddy Modeling",          desc: "Resolving swirling mesoscale currents that drive heat transport." },
-  { pid: "crypto0",silo: "crypto",label: "Hash Entropy Mapping",         desc: "Mapping high-entropy inputs to fixed compact digests with minimal collision." },
-  { pid: "crypto1",silo: "crypto",label: "Merkle Proof Chaining",        desc: "Verifiable linking of records through hierarchical hash commitments." },
-  { pid: "binf0",  silo: "binf", label: "Genomic Pool Search",           desc: "Searching enormous FASTQ read pools for matching subsequences." },
-  { pid: "binf1",  silo: "binf", label: "Sequence Alignment",            desc: "Optimally aligning genetic sequences under insertion/deletion cost." },
-  { pid: "neuro0", silo: "neuro",label: "fMRI Pattern Noise",            desc: "Isolating structured signal from noise in functional brain scans." },
-  { pid: "neuro1", silo: "neuro",label: "Cortical Hub Routing",          desc: "How highly connected neural hubs route information across regions." },
-  { pid: "cs0",    silo: "cs",   label: "Sparse Attention Weights",      desc: "Selective attention over few salient tokens in large language models." },
-  { pid: "cs1",    silo: "cs",   label: "Graph Message Passing",         desc: "Iterative propagation of information along graph edges in GNNs." },
-];
-
-export const BRIDGES: Bridge[] = [
-  { id: "B1", core: "Fractal Routing", a: "eng0", b: "bio0", conf: 0.94, status: "confirmed",
-    impact: "$1.5M averted", desc: "EV battery thermal runaway (burn rate $1.2M) mapped to a 2023 internal mycelial heat-dispersion study. NEXUS recommends biological micro-dispersion architecture for battery cooling channels — averting redundant research.",
-    collab: [{ i: "RK", n: "R. Kessler", role: "Reliability Engineering", dom: "eng" }, { i: "ML", n: "M. Ordoñez", role: "Biomimetics Lead", dom: "bio" }] },
-  { id: "B2", core: "Eddy Dissipation Management", a: "earth0", b: "aero0", conf: 0.89, status: "confirmed",
-    impact: "−40% compute load", desc: "Atmospheric Python models struggling with grid resolution mapped to aerospace Navier-Stokes turbulence math. Applying the aerospace eddy-dissipation algorithms to climate models reduces computational load by ~40%.",
-    collab: [{ i: "AV", n: "A. Volkov", role: "Aero CFD", dom: "aero" }, { i: "TN", n: "T. Nwosu", role: "Climate Modeling", dom: "earth" }] },
-  { id: "B3", core: "Pattern Entropy Compression", a: "binf0", b: "crypto0", conf: 0.91, status: "confirmed",
-    impact: "100× faster alignment", desc: "High search complexity in genomic FASTQ pools mapped to advanced cryptographic hash entropy mapping. Crypto-hashing compresses genomic sequences, accelerating sequence alignment by up to 100×.",
-    collab: [{ i: "SG", n: "S. Gupta", role: "Cryptography", dom: "crypto" }, { i: "DR", n: "D. Reyes", role: "Bioinformatics", dom: "binf" }] },
-  { id: "B4", core: "Network Attention Mechanisms", a: "neuro0", b: "cs0", conf: 0.87, status: "confirmed",
-    impact: "novel hypotheses", desc: "fMRI pattern-noise isolation mapped to LLM sparse attention weights. NEXUS maps ML attention heads onto biological neural hubs to generate novel hypotheses on human memory pathways.",
-    collab: [{ i: "LC", n: "L. Chen", role: "Cognitive Neuroscience", dom: "neuro" }, { i: "JW", n: "J. Wei", role: "ML Research", dom: "cs" }] },
-  { id: "B5", core: "Vascular Load Balancing", a: "bio1", b: "eng1", conf: 0.72, status: "candidate",
-    impact: "under review", desc: "Vascular branching flow structurally resembles multi-cell electrical load balancing. Candidate mapping suggests branching topologies for pack-level load distribution — pending validation.",
-    collab: [{ i: "ML", n: "M. Ordoñez", role: "Biomimetics Lead", dom: "bio" }] },
-  { id: "B6", core: "Boundary Eddy Transfer", a: "aero1", b: "earth1", conf: 0.68, status: "candidate",
-    impact: "under review", desc: "Boundary layer control shares mathematical structure with ocean eddy modelling. Candidate transfer of active-control formulations into mesoscale current simulation.",
-    collab: [{ i: "AV", n: "A. Volkov", role: "Aero CFD", dom: "aero" }] },
-  { id: "B7", core: "Merkle Sequence Proofs", a: "crypto1", b: "binf1", conf: 0.64, status: "candidate",
-    impact: "under review", desc: "Merkle proof chaining may provide verifiable, tamper-evident checkpoints for large-scale sequence alignment pipelines.",
-    collab: [{ i: "SG", n: "S. Gupta", role: "Cryptography", dom: "crypto" }] },
-  { id: "B8", core: "Hub Sparsity Mapping", a: "neuro1", b: "cs1", conf: 0.55, status: "evaluating",
-    impact: "evaluating", desc: "Early signal: cortical hub routing may be isomorphic to graph message passing sparsity patterns. GNN still gathering cross-silo evidence.",
-    collab: [{ i: "LC", n: "L. Chen", role: "Cognitive Neuroscience", dom: "neuro" }] },
-];
-
-/* Real LangGraph ReAct subagents (core/orchestrator.py) */
-export const AGENTS: Agent[] = [
-  { id: "deep-reasoner",       tier: "deep", color: "#4ec9b0", tools: ["validate_quality"], note: "Plan + final QA" },
-  { id: "dark-data-ingestion", tier: "fast", color: "#e0a34e", tools: ["ingest_dark_data", "validate_quality"], note: "Primary local source" },
-  { id: "literature-search",   tier: "fast", color: "#5b9bd8", tools: ["literature_search", "validate_quality"], note: "Optional external", external: true },
-  { id: "data-processing",     tier: "fast", color: "#e0708f", tools: ["process_documents"], note: "PDF → chunks" },
-  { id: "rosetta-core",        tier: "deep", color: "#a889e0", tools: ["rosetta_translate"], note: "Jargon → principles" },
-  { id: "knowledge-graph",     tier: "deep", color: "#7c8ce0", tools: ["extract_prisma_knowledge", "neo4j_vector_search", "neo4j_query"], note: "Neo4j graph + vectors" },
-  { id: "analysis",            tier: "deep", color: "#5fbf8f", tools: ["analyze_evidence", "neo4j_vector_search", "neo4j_query"], note: "GraphRAG + isomorphic detection" },
-  { id: "writing",             tier: "deep", color: "#e08560", tools: ["draft_section", "neo4j_vector_search", "validate_quality"], note: "Findings + mapping alerts" },
-];
+/* Real LangGraph ReAct subagents (core/capabilities.py). Populated at runtime
+ * from GET /api/capabilities — this is just the fallback shape/palette. */
+const AGENT_PALETTE: Record<Tier, string[]> = {
+  deep: ["#4ec9b0", "#a889e0", "#7c8ce0", "#5fbf8f"],
+  fast: ["#e0a34e", "#5b9bd8", "#e0708f", "#e08560"],
+};
+export function colorForCapability(tier: Tier, idx: number): string {
+  const pal = AGENT_PALETTE[tier] || AGENT_PALETTE.fast;
+  return pal[idx % pal.length];
+}
 
 export const PIPELINE: PipelineStep[] = [
   { key: "plan",      label: "Plan",         agent: "deep-reasoner",       desc: "Execution plan" },
@@ -124,10 +77,16 @@ export const RIGORS: [string, string][] = [
   ["exploratory", "Exploratory"], ["prisma", "PRISMA 2020"], ["cochrane", "Cochrane"],
 ];
 
-/* ── Lookups ───────────────────────────────────────────────────────────── */
-export const siloMap: Record<string, Silo> = Object.fromEntries(SILOS.map((s) => [s.id, s]));
-export const pMap: Record<string, Principle> = Object.fromEntries(PRINCIPLES.map((p) => [p.pid, p]));
-export const bMap: Record<string, Bridge> = Object.fromEntries(BRIDGES.map((b) => [b.id, b]));
+/* ── Lookup builders — call with the current (React-state) arrays ────────── */
+export function buildSiloMap(silos: Silo[]): Record<string, Silo> {
+  return Object.fromEntries(silos.map((s) => [s.id, s]));
+}
+export function buildPMap(principles: Principle[]): Record<string, Principle> {
+  return Object.fromEntries(principles.map((p) => [p.pid, p]));
+}
+export function buildBMap(bridges: Bridge[]): Record<string, Bridge> {
+  return Object.fromEntries(bridges.map((b) => [b.id, b]));
+}
 
 export function statusColor(st: BridgeStatus): string {
   return st === "confirmed" ? "#5fbf8f" : st === "candidate" ? "#e0a850" : "#6f9bd8";
@@ -144,8 +103,91 @@ export function shortLabel(t: string): string {
   return t.length > 22 ? t.slice(0, 21) + "…" : t;
 }
 
+/* ── Mapping helpers: real backend payload → graph data ───────────────────
+ * `meta` SSE event shape (BE-1 contract):
+ *   hyperedges: [{hyperedge_id, principle_name, member_entity_ids, domain_jargon,
+ *                 weight, paper_ids, checklist_tags, source_entity_labels}]
+ *   isomorphicClusters: [{cluster_id, shared_principle, hyperedge_ids, domains,
+ *                          similarity_score, actionable_insight}]
+ * These translate loosely onto the old principle/bridge shape so the existing
+ * canvas + inspector UI can render them without a redesign. */
+export interface HyperedgeMeta {
+  hyperedge_id: string; principle_name: string; member_entity_ids?: string[];
+  domain_jargon?: string[]; weight?: number; paper_ids?: string[];
+  checklist_tags?: string[]; source_entity_labels?: string[];
+}
+export interface IsomorphicClusterMeta {
+  cluster_id: string; shared_principle: string; hyperedge_ids: string[];
+  domains?: string[]; similarity_score?: number; actionable_insight?: string;
+}
+
+/** Derive (or reuse) a Silo id/record for a domain name pulled off real data. */
+function ensureSilo(domain: string, silos: Silo[], siloIdx: Record<string, Silo>): Silo {
+  const id = domain.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") || "domain";
+  if (siloIdx[id]) return siloIdx[id];
+  const silo: Silo = {
+    id, name: domain, color: colorForDomain(silos.length),
+    meta: "from discovery run", files: "—", ingest: 1,
+  };
+  silos.push(silo); siloIdx[id] = silo;
+  return silo;
+}
+
+/**
+ * Fold one discovery run's hyperedges + isomorphic clusters into the
+ * accumulated silos/principles/bridges arrays. Mutates and returns new
+ * arrays (does not mutate the inputs) so callers can setState directly.
+ */
+export function foldDiscoveryResult(
+  prev: { silos: Silo[]; principles: Principle[]; bridges: Bridge[] },
+  hyperedges: HyperedgeMeta[] | undefined,
+  clusters: IsomorphicClusterMeta[] | undefined
+): { silos: Silo[]; principles: Principle[]; bridges: Bridge[] } {
+  const silos = [...prev.silos];
+  const siloIdx = buildSiloMap(silos);
+  const principles = [...prev.principles];
+  const pIdx = buildPMap(principles);
+  const bridges = [...prev.bridges];
+  const bIdx = buildBMap(bridges);
+
+  for (const he of hyperedges || []) {
+    if (!he || !he.hyperedge_id) continue;
+    const domain = (he.domain_jargon && he.domain_jargon[0]) || "unlabeled";
+    const silo = ensureSilo(domain, silos, siloIdx);
+    const pid = he.hyperedge_id;
+    if (!pIdx[pid]) {
+      const p: Principle = {
+        pid, silo: silo.id,
+        label: he.principle_name || pid,
+        desc: (he.source_entity_labels || []).join(", ") || (he.checklist_tags || []).join(", ") || "",
+      };
+      principles.push(p); pIdx[pid] = p;
+    }
+  }
+
+  for (const cl of clusters || []) {
+    if (!cl || !cl.cluster_id || !cl.hyperedge_ids || cl.hyperedge_ids.length < 2) continue;
+    const [a, b] = cl.hyperedge_ids;
+    if (!pIdx[a] || !pIdx[b]) continue; // need both endpoints resolved to hyperedges above
+    if (bIdx[cl.cluster_id]) continue;
+    const conf = typeof cl.similarity_score === "number" ? Math.max(0, Math.min(1, cl.similarity_score)) : 0.5;
+    const status: BridgeStatus = conf >= 0.8 ? "confirmed" : conf >= 0.6 ? "candidate" : "evaluating";
+    const bridge: Bridge = {
+      id: cl.cluster_id, core: cl.shared_principle || cl.cluster_id, a, b, conf, status,
+      impact: cl.actionable_insight ? shortLabel(cl.actionable_insight) : "—",
+      desc: cl.actionable_insight || "",
+      collab: [],
+    };
+    bridges.push(bridge); bIdx[bridge.id] = bridge;
+  }
+
+  return { silos, principles, bridges };
+}
+
 /* ============================================================================
  * GraphEngine — imperative canvas force graph. Instantiated by page.tsx.
+ * Owns no static data: silos/principles/bridges are pushed in via setData()
+ * whenever page.tsx accumulates a new discovery result. Starts empty.
  * ========================================================================== */
 export class GraphEngine {
   canvas: HTMLCanvasElement;
@@ -162,6 +204,10 @@ export class GraphEngine {
   activeSilo: string | null = null;
   filterKey: string = "all";
   hoverId: string | null = null;
+
+  silos: Silo[] = [];
+  principles: Principle[] = [];
+  bridges: Bridge[] = [];
 
   private raf = 0;
   private ro: ResizeObserver | null = null;
@@ -206,26 +252,44 @@ export class GraphEngine {
     this.handlers.onSelect(id, kind);
   }
 
-  private buildLayout() {
+  /** Replace the engine's data with a fresh accumulated snapshot (silos,
+   * principles, bridges) and rebuild the layout. Existing node positions are
+   * preserved by id where possible so the graph doesn't jump on every update. */
+  setData(silos: Silo[], principles: Principle[], bridges: Bridge[]) {
+    const prevPos: Record<string, { x: number; y: number }> = {};
+    for (const n of this.nodes) prevPos[n.id] = { x: n.x, y: n.y };
+    this.silos = silos;
+    this.principles = principles;
+    this.bridges = bridges;
+    this.buildLayout(prevPos);
+    this.kick(0.6);
+  }
+
+  private buildLayout(prevPos: Record<string, { x: number; y: number }> = {}) {
     const R = 250;
-    SILOS.forEach((s, i) => {
-      const ang = (i / SILOS.length) * Math.PI * 2 - Math.PI / 2;
+    this.siloAnchor = {};
+    this.silos.forEach((s, i) => {
+      const ang = (i / Math.max(1, this.silos.length)) * Math.PI * 2 - Math.PI / 2;
       this.siloAnchor[s.id] = { x: Math.cos(ang) * R, y: Math.sin(ang) * R };
     });
     this.nodes = [];
-    PRINCIPLES.forEach((p) => {
-      const a = this.siloAnchor[p.silo];
+    this.principles.forEach((p) => {
+      const a = this.siloAnchor[p.silo] || { x: 0, y: 0 };
+      const prior = prevPos[p.pid];
       const jx = (Math.random() - 0.5) * 70, jy = (Math.random() - 0.5) * 70;
-      this.nodes.push({ id: p.pid, type: "p", ref: p, x: a.x + jx, y: a.y + jy, vx: 0, vy: 0, r: 7 });
+      this.nodes.push({ id: p.pid, type: "p", ref: p, x: prior?.x ?? a.x + jx, y: prior?.y ?? a.y + jy, vx: 0, vy: 0, r: 7 });
     });
     this.nodeMap = {}; this.nodes.forEach((n) => (this.nodeMap[n.id] = n));
-    BRIDGES.forEach((b) => {
+    this.bridges.forEach((b) => {
       const na = this.nodeMap[b.a], nb = this.nodeMap[b.b];
-      this.nodes.push({ id: "b:" + b.id, type: "b", ref: b, x: (na.x + nb.x) / 2, y: (na.y + nb.y) / 2, vx: 0, vy: 0, r: 9 });
+      if (!na || !nb) return; // sparse/partial data — skip bridges missing an endpoint
+      const prior = prevPos["b:" + b.id];
+      this.nodes.push({ id: "b:" + b.id, type: "b", ref: b, x: prior?.x ?? (na.x + nb.x) / 2, y: prior?.y ?? (na.y + nb.y) / 2, vx: 0, vy: 0, r: 9 });
     });
     this.nodeMap = {}; this.nodes.forEach((n) => (this.nodeMap[n.id] = n));
     this.edges = [];
-    BRIDGES.forEach((b) => {
+    this.bridges.forEach((b) => {
+      if (!this.nodeMap[b.a] || !this.nodeMap[b.b]) return;
       this.edges.push({ from: "b:" + b.id, to: b.a, ref: b });
       this.edges.push({ from: "b:" + b.id, to: b.b, ref: b });
     });
@@ -283,12 +347,13 @@ export class GraphEngine {
       }
       if (p.type === "p") {
         const an = this.siloAnchor[p.ref.silo];
-        fx += (an.x - p.x) * 0.012; fy += (an.y - p.y) * 0.012;
+        if (an) { fx += (an.x - p.x) * 0.012; fy += (an.y - p.y) * 0.012; }
       }
       p._fx = fx; p._fy = fy;
     }
     for (const e of this.edges) {
       const A = this.nodeMap[e.from], B = this.nodeMap[e.to];
+      if (!A || !B) continue;
       const dx = B.x - A.x, dy = B.y - A.y;
       const d = Math.sqrt(dx * dx + dy * dy) || 0.01;
       const diff = (d - 78) / d * 0.045;
@@ -296,9 +361,10 @@ export class GraphEngine {
       if (A !== this.dragNode) { A._fx! += fx; A._fy! += fy; }
       if (B !== this.dragNode) { B._fx! -= fx; B._fy! -= fy; }
     }
-    for (const b of BRIDGES) {
-      const bn = this.nodeMap["b:" + b.id]; if (bn === this.dragNode) continue;
+    for (const b of this.bridges) {
+      const bn = this.nodeMap["b:" + b.id]; if (!bn || bn === this.dragNode) continue;
       const na = this.nodeMap[b.a], nb = this.nodeMap[b.b];
+      if (!na || !nb) continue;
       const mx = (na.x + nb.x) / 2, my = (na.y + nb.y) / 2;
       bn._fx! += (mx - bn.x) * 0.05; bn._fy! += (my - bn.y) * 0.05;
     }
@@ -313,7 +379,7 @@ export class GraphEngine {
   private isNeighbor(id: string, sel: string): boolean {
     const selNode = this.nodeMap[sel]; if (!selNode) return false;
     if (selNode.type === "b") return id === selNode.ref.a || id === selNode.ref.b;
-    for (const b of BRIDGES) {
+    for (const b of this.bridges) {
       if (b.a === sel || b.b === sel) {
         if (id === "b:" + b.id) return true;
         if (id === b.a || id === b.b) return true;
@@ -333,12 +399,16 @@ export class GraphEngine {
     const ox = ((this.cam.x % step) + step) % step, oy = ((this.cam.y % step) + step) % step;
     for (let x = ox; x < W; x += step) for (let y = oy; y < H; y += step) { ctx.beginPath(); ctx.arc(x, y, 0.9, 0, 6.28); ctx.fill(); }
 
+    if (!this.nodes.length) return;
+
+    const siloMap = buildSiloMap(this.silos);
+    const pMap = buildPMap(this.principles);
     const sel = this.selectedId, activeSilo = this.activeSilo, fk = this.filterKey, hov = this.hoverId;
     const dim = (n: GNode) => {
       let d = 1;
       if (activeSilo) {
         const inSilo = n.type === "p" ? n.ref.silo === activeSilo
-          : (pMap[n.ref.a].silo === activeSilo || pMap[n.ref.b].silo === activeSilo);
+          : (pMap[n.ref.a]?.silo === activeSilo || pMap[n.ref.b]?.silo === activeSilo);
         if (!inSilo) d *= 0.16;
       }
       if (fk !== "all" && n.type === "b" && n.ref.status !== fk) d *= 0.16;
@@ -351,9 +421,10 @@ export class GraphEngine {
 
     for (const e of this.edges) {
       const A = this.nodeMap[e.from], B = this.nodeMap[e.to];
+      if (!A || !B) continue;
       const sa = this.toScreen(A), sb = this.toScreen(B);
       const pnode = A.type === "p" ? A : B;
-      const col = siloMap[pnode.ref.silo].color;
+      const col = siloMap[pnode.ref.silo]?.color || "#7c8ce0";
       const d = Math.min(dim(A), dim(B));
       const bn = A.type === "b" ? A : B;
       ctx.beginPath(); ctx.moveTo(sa.x, sa.y); ctx.lineTo(sb.x, sb.y);
@@ -367,7 +438,7 @@ export class GraphEngine {
       const s = this.toScreen(n), d = dim(n);
       const isSel = n.id === sel, isHov = n.id === hov;
       if (n.type === "p") {
-        const col = siloMap[n.ref.silo].color, rr = n.r * this.cam.s;
+        const col = siloMap[n.ref.silo]?.color || "#7c8ce0", rr = n.r * this.cam.s;
         if (isSel || isHov) { ctx.beginPath(); ctx.arc(s.x, s.y, rr + 6, 0, 6.28); ctx.fillStyle = rgba(col, 0.14); ctx.fill(); }
         ctx.beginPath(); ctx.arc(s.x, s.y, rr, 0, 6.28);
         ctx.fillStyle = rgba("#0b0e13", d); ctx.fill();

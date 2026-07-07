@@ -7,11 +7,13 @@
  * discovery run wired to the backend at http://localhost:8000.
  * ========================================================================== */
 
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import {
-  GraphEngine, SILOS, PRINCIPLES, BRIDGES, AGENTS, PIPELINE, RIGORS,
-  SSE_STAGE_MAP, siloMap, pMap, bMap, statusColor, statusText, rgba, shortLabel,
-  type Bridge,
+  GraphEngine, PIPELINE, RIGORS, SSE_STAGE_MAP,
+  buildSiloMap, buildPMap, buildBMap, statusColor, statusText, rgba, shortLabel,
+  foldDiscoveryResult, colorForCapability,
+  type Bridge, type Silo, type Principle, type Agent, type Tier,
+  type HyperedgeMeta, type IsomorphicClusterMeta,
 } from "@/lib/nexusEngine";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
@@ -25,6 +27,7 @@ interface RunState {
   rigor: string; output: string; sources: { title: string; id: string }[]; error: string | null;
 }
 interface LogLine { time: string; tag: string; tagc: string; text: string }
+interface GraphData { silos: Silo[]; principles: Principle[]; bridges: Bridge[] }
 
 const clock = (off = 0) => new Date(Date.now() + off * 1000).toTimeString().slice(0, 8);
 const fmt = (n: number) => n.toLocaleString("en-US");
@@ -43,19 +46,19 @@ export default function NexusWorkspace() {
   const [rigor, setRigor] = useState("prisma");
   const [conn, setConn] = useState<Conn>("checking");
   const [model, setModel] = useState("ollama:qwen2.5:3b");
-  const [pCount, setPCount] = useState(3481);
-  const [bCount] = useState(214);
-  const [cycle, setCycle] = useState(1287);
+  const [graphData, setGraphData] = useState<GraphData>({ silos: [], principles: [], bridges: [] });
+  const [completedRuns, setCompletedRuns] = useState(0);
+  const [agents, setAgents] = useState<Agent[]>([]);
   const [run, setRun] = useState<RunState | null>(null);
-  const [log, setLog] = useState<LogLine[]>(() => [
-    { time: clock(-8), tag: "ROSETTA", tagc: "#a889e0", text: "'Angiogenesis' → core principle 'Decentralized Resource Calling'" },
-    { time: clock(-6), tag: "INGEST", tagc: "#5b9bd8", text: "parsed 38 CAD schematics from /silos/engineering/thermal" },
-    { time: clock(-4), tag: "GNN", tagc: "#4ec9b0", text: "linked 'Atmospheric Grid Resolution' ⟷ 'Navier-Stokes Turbulence' · conf 0.89" },
-    { time: clock(-2), tag: "VECTOR", tagc: "#7c8ce0", text: "214 bridges indexed · 3 new candidates this cycle" },
-    { time: clock(0), tag: "ROSETTA", tagc: "#a889e0", text: "normalized 1,204 terms from /silos/aerospace/telemetry" },
-  ]);
+  const [log, setLog] = useState<LogLine[]>([]);
   const [realLog, setRealLog] = useState<LogLine[] | null>(null);
   const [runtime, setRuntime] = useState<Record<string, any> | null>(null);
+
+  const pCount = graphData.principles.length;
+  const bCount = graphData.bridges.length;
+  const siloMap = useMemo(() => buildSiloMap(graphData.silos), [graphData.silos]);
+  const pMap = useMemo(() => buildPMap(graphData.principles), [graphData.principles]);
+  const bMap = useMemo(() => buildBMap(graphData.bridges), [graphData.bridges]);
 
   const runRef = useRef<RunState | null>(null);
   runRef.current = run;
@@ -76,27 +79,9 @@ export default function NexusWorkspace() {
 
   useEffect(() => { engineRef.current?.setActiveSilo(activeSilo); }, [activeSilo]);
   useEffect(() => { engineRef.current?.setFilter(filterKey); }, [filterKey]);
-
-  /* ── live feed / counters ─────────────────────────────────────────── */
-  const pushLog = useCallback(() => {
-    const rand = <T,>(a: T[]) => a[Math.floor(Math.random() * a.length)];
-    const opts = [
-      { tag: "ROSETTA", tagc: "#a889e0", text: () => `normalized ${900 + Math.floor(Math.random() * 600)} terms from /silos/${rand(["aerospace", "engineering", "bio", "neuro"])}` },
-      { tag: "GNN", tagc: "#4ec9b0", text: () => { const b = rand(BRIDGES); return `evaluated '${b.core}' · conf ${(b.conf + (Math.random() * 0.02 - 0.01)).toFixed(2)}`; } },
-      { tag: "INGEST", tagc: "#5b9bd8", text: () => `parsed ${10 + Math.floor(Math.random() * 60)} artifacts from /silos/${rand(["crypto", "earth", "binf", "cs"])}` },
-      { tag: "VECTOR", tagc: "#7c8ce0", text: () => `re-embedded ${2 + Math.floor(Math.random() * 9)} principles into shared space` },
-      { tag: "BRIDGE", tagc: "#5fbf8f", text: () => `candidate promoted · confidence threshold cleared` },
-    ];
-    const o = rand(opts);
-    setLog((l) => [...l.slice(-4), { time: clock(0), tag: o.tag, tagc: o.tagc, text: o.text() }]);
-    if (o.tag === "GNN") setCycle((c) => c + 1);
-  }, []);
-
   useEffect(() => {
-    const lt = setInterval(() => { if (connRef.current !== "live") pushLog(); }, 2600);
-    const ct = setInterval(() => setPCount((p) => p + Math.floor(Math.random() * 7)), 1500);
-    return () => { clearInterval(lt); clearInterval(ct); };
-  }, [pushLog]);
+    engineRef.current?.setData(graphData.silos, graphData.principles, graphData.bridges);
+  }, [graphData]);
 
   /* ── backend bridge ───────────────────────────────────────────────── */
   const fetchT = async (url: string, opts?: RequestInit, ms = 3000) => {
@@ -150,6 +135,27 @@ export default function NexusWorkspace() {
 
   const reconnect = () => { setConn("checking"); connRef.current = "checking"; if (monTimer.current) clearTimeout(monTimer.current); probeBackend(); };
 
+  /* ── agents (capabilities) ────────────────────────────────────────── */
+  const fetchCapabilities = useCallback(async () => {
+    const base = API_BASE.replace(/\/$/, "");
+    try {
+      const r = await fetchT(base + "/api/capabilities", {}, 4000);
+      const j = await r.json();
+      const caps = Array.isArray(j.capabilities) ? j.capabilities : [];
+      const mapped: Agent[] = caps.map((c: { name: string; model_tier?: string; tool_names?: string[]; catalog_note?: string; description?: string }, idx: number) => {
+        const tier: Tier = c.model_tier === "deep" ? "deep" : "fast";
+        return {
+          id: c.name, tier, color: colorForCapability(tier, idx),
+          tools: Array.isArray(c.tool_names) ? c.tool_names : [],
+          note: c.catalog_note || c.description || "",
+        };
+      });
+      setAgents(mapped);
+    } catch { setAgents([]); }
+  }, []);
+
+  useEffect(() => { fetchCapabilities(); }, [fetchCapabilities]);
+
   /* ── discovery run ────────────────────────────────────────────────── */
   const advanceStage = (idx: number) =>
     setRun((r) => (r ? { ...r, stageIdx: Math.max(r.stageIdx, idx) } : r));
@@ -161,50 +167,6 @@ export default function NexusWorkspace() {
 
   const pushRunLog = (stage: string, msg: string) =>
     setLog((l) => [...l.slice(-4), { time: clock(0), tag: (stage || "STAGE").toUpperCase().slice(0, 7), tagc: "#4ec9b0", text: msg || "" }]);
-
-  const demoTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const demoDiscovery = (q: string, quiet = false) => {
-    const ql = q.toLowerCase();
-    const b: Bridge =
-      BRIDGES.find((x) => x.status === "confirmed" && (
-        x.core.toLowerCase().split(" ").some((w) => ql.includes(w)) ||
-        pMap[x.a].label.toLowerCase().split(" ").some((w) => w.length > 4 && ql.includes(w)) ||
-        pMap[x.b].label.toLowerCase().split(" ").some((w) => w.length > 4 && ql.includes(w))
-      )) || BRIDGES.find((x) => x.status === "confirmed")!;
-    const pa = pMap[b.a], pb = pMap[b.b];
-    const sources = [
-      { title: "Hierarchical transport in mycelial networks", id: "arXiv:2301.08770" },
-      { title: "Sparse attention & biological hub routing", id: "arXiv:2502.10794" },
-      { title: "Agentic RAG for enterprise synthesis", id: "arXiv:2311.16101" },
-    ];
-    const output =
-      `Cross-silo isomorphic mapping detected: "${b.core}".\n\n` +
-      `${siloMap[pa.silo].name} · ${pa.label}  ⟷  ${siloMap[pb.silo].name} · ${pb.label}\n\n` +
-      `${b.desc}\n\nProjected impact: ${b.impact}. GNN confidence ${Math.round(b.conf * 100)}%. ` +
-      `Enforced rigor: ${rigor.toUpperCase()}. All artifacts sourced from local silos under the air-gap policy (NEXUS_LOCAL_ONLY).`;
-
-    let i = 0;
-    const step = () => {
-      if (!runRef.current || !runRef.current.active) return;
-      advanceStage(i);
-      const st = PIPELINE[i];
-      if (st && !quiet) pushRunLog(st.agent, `${st.label} · ${st.desc}`);
-      i++;
-      if (i < PIPELINE.length) { demoTimer.current = setTimeout(step, 720); }
-      else {
-        let k = 0;
-        const chunk = () => {
-          if (!runRef.current || !runRef.current.active) return;
-          k += 26;
-          setRun((r) => (r ? { ...r, output: output.slice(0, k) } : r));
-          if (k < output.length) { demoTimer.current = setTimeout(chunk, 24); }
-          else { finishRun({ sources }); engineRef.current?.selectById("b:" + b.id); }
-        };
-        chunk();
-      }
-    };
-    step();
-  };
 
   const streamDiscovery = async (q: string) => {
     const base = API_BASE.replace(/\/$/, "");
@@ -233,15 +195,22 @@ export default function NexusWorkspace() {
             if (idx != null) advanceStage(idx);
             pushRunLog(data.stage, data.message);
           } else if (ev === "content") { appendOutput(data.delta || ""); }
-          else if (ev === "meta") { finishRun({ sources: (data.sources || []).map((s: any) => ({ title: s.title, id: s.paper_id || s.year || "" })) }); }
+          else if (ev === "meta") {
+            finishRun({ sources: (data.sources || []).map((s: { title: string; paper_id?: string; year?: string }) => ({ title: s.title, id: s.paper_id || s.year || "" })) });
+            const hyperedges: HyperedgeMeta[] = data.hyperedges || [];
+            const clusters: IsomorphicClusterMeta[] = data.isomorphicClusters || [];
+            if (hyperedges.length || clusters.length) {
+              setGraphData((g) => foldDiscoveryResult(g, hyperedges, clusters));
+            }
+            setCompletedRuns((c) => c + 1);
+          }
           else if (ev === "error") { finishRun({ error: data.message || "stream error" }); }
           else if (ev === "done") { finishRun({}); }
         }
       }
       if (runRef.current && runRef.current.active) finishRun({});
     } catch {
-      finishRun({ error: "Backend stream failed — showing local demo instead" });
-      demoDiscovery(q, true);
+      finishRun({ error: "Backend stream failed — no data returned." });
     }
   };
 
@@ -250,7 +219,8 @@ export default function NexusWorkspace() {
     const q = (queryRef.current?.value.trim()) || "Map EV battery thermal runaway to biological heat dispersion";
     const next: RunState = { active: true, done: false, stageIdx: 0, query: q, rigor, output: "", sources: [], error: null };
     setRun(next); runRef.current = next;
-    if (conn === "live") streamDiscovery(q); else demoDiscovery(q);
+    if (conn === "live") streamDiscovery(q);
+    else finishRun({ error: "Backend is not connected — click the connection pill to retry." });
   };
 
   /* ── derived ──────────────────────────────────────────────────────── */
@@ -309,12 +279,6 @@ export default function NexusWorkspace() {
             <span style={{ fontSize: 11, color: "#5fbf8f" }}>◆</span>
             <span style={{ fontFamily: MONO, fontSize: 10, letterSpacing: .5, color: "#89b7a0" }}>ON-PREM · SOC2</span>
           </div>
-          <div style={{ display: "flex", alignItems: "center" }}>
-            {[["RK", "eng"], ["ML", "bio"], ["AV", "aero"], ["SG", "crypto"], ["LC", "neuro"]].map(([i, d], idx) => {
-              const dd = siloMap[d];
-              return <div key={i} title={dd.name + " researcher"} style={{ width: 28, height: 28, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: MONO, fontSize: 10, fontWeight: 600, color: dd.color, background: "#12151c", border: `1.5px solid ${dd.color}`, marginLeft: idx ? -8 : 0, position: "relative", zIndex: 10 - idx }}>{i}</div>;
-            })}
-          </div>
         </div>
       </header>
 
@@ -360,9 +324,9 @@ export default function NexusWorkspace() {
           {leftTab === "silos" && (
             <div style={{ flex: 1, overflowY: "auto", padding: 8, minHeight: 0 }}>
               <div style={{ padding: "6px 8px 10px", fontSize: 11, color: "#8b93a3" }}>Dark data ingested per domain</div>
-              {SILOS.map((s) => {
+              {graphData.silos.map((s) => {
                 const active = activeSilo === s.id;
-                const count = PRINCIPLES.filter((p) => p.silo === s.id).length;
+                const count = graphData.principles.filter((p) => p.silo === s.id).length;
                 return (
                   <div key={s.id} onClick={() => setActiveSilo(active ? null : s.id)} style={{ padding: "11px 12px", borderRadius: 9, cursor: "pointer", marginBottom: 4, background: active ? rgba(s.color, 0.09) : "transparent", border: active ? `1px solid ${rgba(s.color, 0.4)}` : "1px solid transparent" }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
@@ -385,7 +349,7 @@ export default function NexusWorkspace() {
           {leftTab === "agents" && (
             <div style={{ flex: 1, overflowY: "auto", padding: 8, minHeight: 0 }}>
               <div style={{ padding: "6px 8px 10px", fontSize: 11, color: "#8b93a3" }}>LangGraph ReAct subagents · orchestrated per run</div>
-              {AGENTS.map((a) => {
+              {agents.map((a) => {
                 let status = "idle", sc = "#5a6270";
                 if (activeAgentId === a.id) { status = "active"; sc = a.color; }
                 else if (run && run.done) { status = "done"; sc = "#5fbf8f"; }
@@ -508,7 +472,7 @@ export default function NexusWorkspace() {
                 {run.done && !run.error && (
                   <div style={{ marginTop: 16 }}>
                     <div style={{ fontFamily: MONO, fontSize: 9, letterSpacing: 1.5, color: "#5a6270", marginBottom: 9 }}>CROSS-SILO MAPPING ALERTS</div>
-                    {BRIDGES.filter((x) => x.status === "confirmed").map((b) => {
+                    {graphData.bridges.filter((x) => x.status === "confirmed").map((b) => {
                       const pa = pMap[b.a], pb = pMap[b.b];
                       return (
                         <div key={b.id} onClick={() => engineRef.current?.selectById("b:" + b.id)} style={{ padding: "10px 12px", border: "1px solid rgba(255,255,255,.07)", borderRadius: 8, background: "rgba(255,255,255,.015)", marginBottom: 7, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
@@ -542,7 +506,7 @@ export default function NexusWorkspace() {
               <div style={{ padding: "16px 18px" }}>
                 <div style={{ fontSize: 12, color: "#8b93a3", lineHeight: 1.6, marginBottom: 16 }}>Select a <span style={{ color: "#5fbf8f" }}>◆ bridge</span> in the graph to inspect its isomorphic mapping, or a <span style={{ color: "#7c8ce0" }}>● principle</span> to trace its links.</div>
                 <div style={{ fontFamily: MONO, fontSize: 10, letterSpacing: 1.5, color: "#5a6270", marginBottom: 10 }}>TOP DISCOVERIES THIS CYCLE</div>
-                {[...BRIDGES].sort((a, b) => b.conf - a.conf).slice(0, 4).map((b) => {
+                {[...graphData.bridges].sort((a, b) => b.conf - a.conf).slice(0, 4).map((b) => {
                   const pa = pMap[b.a], pb = pMap[b.b], sc = statusColor(b.status);
                   return (
                     <div key={b.id} onClick={() => engineRef.current?.selectById("b:" + b.id)} style={{ padding: "12px 13px", border: "1px solid rgba(255,255,255,.07)", borderRadius: 9, background: "rgba(255,255,255,.015)", marginBottom: 9, cursor: "pointer" }}>
@@ -645,7 +609,7 @@ export default function NexusWorkspace() {
             {/* PRINCIPLE */}
             {selPrinc && !showDiscovery && (() => {
               const p = selPrinc, s = siloMap[p.silo];
-              const bridges = BRIDGES.filter((b) => b.a === p.pid || b.b === p.pid);
+              const bridges = graphData.bridges.filter((b) => b.a === p.pid || b.b === p.pid);
               return (
                 <div style={{ padding: 18 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 11, marginBottom: 6 }}>
@@ -685,7 +649,7 @@ export default function NexusWorkspace() {
           <div style={{ flex: 1, position: "relative", height: 1, overflow: "hidden", margin: "0 8px", background: "rgba(255,255,255,.04)" }}>
             <div style={{ position: "absolute", top: 0, left: 0, width: "40%", height: 1, background: "linear-gradient(90deg,transparent,#4ec9b0,transparent)", animation: "nx-sweep 3s linear infinite" }} />
           </div>
-          <span style={{ fontFamily: MONO, fontSize: 10, color: "#5a6270" }}>GNN cycle #{cycle}</span>
+          <span style={{ fontFamily: MONO, fontSize: 10, color: "#5a6270" }}>{completedRuns} discovery run{completedRuns === 1 ? "" : "s"} completed</span>
         </div>
         <div style={{ flex: 1, overflow: "hidden", padding: "8px 16px", display: "flex", flexDirection: "column", gap: 3 }}>
           {logSrc.map((l, i) => (
