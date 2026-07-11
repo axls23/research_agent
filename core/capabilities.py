@@ -1,4 +1,5 @@
 """
+l
 core/capabilities.py
 ====================
 Mosaic capability registry for NEXUS subagents.
