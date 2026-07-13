@@ -259,11 +259,11 @@ export default function AboutPage() {
                                 Upload your research papers and watch the multi-agent pipeline work.
                             </p>
                             <a
-                                href="/chat"
+                                href="/workspace"
                                 className="inline-flex items-center gap-2 px-7 py-3 rounded-xl text-white text-sm font-semibold"
                                 style={{ background: "linear-gradient(135deg, #6366f1, #a78bfa)", boxShadow: "0 0 24px rgba(99,102,241,0.35)" }}
                             >
-                                Open Research Chat
+                                Open Research Workspace
                                 <ArrowRight className="w-4 h-4" />
                             </a>
                         </div>
