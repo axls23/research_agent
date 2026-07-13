@@ -458,6 +458,7 @@ async def run_research_pipeline(
             research_goals=research_goals,
             model=agentic_model,
             rigor_level=rigor_level,
+            enable_external_search=enable_external_search,
         )
         logger.info("Agentic pipeline complete!")
         return result

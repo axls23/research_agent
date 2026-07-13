@@ -40,6 +40,10 @@ class ChatRequest(BaseModel):
     mode: Literal["agentic", "default", "langgraph"] = "agentic"
     research_goals: List[str] = Field(default_factory=list)
     allow_auto_override: bool = True
+    # Opt-in to real external literature search (arXiv/Semantic Scholar/Crossref).
+    # Defaults True for the chat flow so requests produce grounded output;
+    # run_research_pipeline's own default stays False for other callers.
+    enable_external_search: bool = True
 
 
 class ChatSource(BaseModel):
@@ -187,6 +191,19 @@ def _build_chat_payload(result_state: Dict[str, Any]) -> Dict[str, Any]:
         ]
         if summaries:
             final_text = "\n\n".join(summaries[:2])
+    elif result_state.get("papers"):
+        # No authored draft yet, but literature-search returned real results --
+        # surface those directly instead of a canned line.
+        papers = result_state["papers"]
+        lines = [f"Found {len(papers)} paper(s) from external literature search:\n"]
+        for p in papers[:10]:
+            title = p.get("title", "Untitled")
+            year = p.get("year")
+            year_str = f" ({year})" if year else ""
+            abstract = (p.get("abstract") or "").strip()
+            snippet = (abstract[:280] + "…") if len(abstract) > 280 else abstract
+            lines.append(f"- **{title}**{year_str}\n  {snippet}")
+        final_text = "\n\n".join(lines)
     else:
         final_text = "I have completed analyzing the research related to your query."
 
@@ -295,6 +312,7 @@ def _build_pipeline_kwargs(req: ChatRequest) -> Dict[str, Any]:
         "allow_auto_override": bool(req.allow_auto_override),
         "mode": req.mode if use_harness else "agentic",
         "agentic_model": _get_agentic_ollama_model(),
+        "enable_external_search": bool(req.enable_external_search),
     }
 
 

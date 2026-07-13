@@ -79,15 +79,30 @@ def begin_agentic_run(run_id: str) -> None:
             "started_at": _utc_now_iso(),
             "stages": {},
         }
+    # Reset the shared blackboard so results from a prior run can't leak
+    # into this one (single-user/sequential usage only -- concurrent runs
+    # would still race on this module-level dict).
+    with _AGENTIC_STATE_LOCK:
+        for key in _AGENTIC_STATE:
+            _AGENTIC_STATE[key] = []
 
 
 def finish_agentic_run(run_id: str) -> Dict[str, Any]:
-    """Return and clear per-run validation tracking data."""
+    """Return and clear per-run validation tracking data, plus whatever
+    papers/chunks/entities/hyperedges/audit_log accumulated on the shared
+    blackboard during this run."""
+    with _AGENTIC_STATE_LOCK:
+        collected = {key: list(value) for key, value in _AGENTIC_STATE.items()}
+        for key in _AGENTIC_STATE:
+            _AGENTIC_STATE[key] = []
+
     if not run_id:
-        return {"started_at": None, "stages": {}}
+        return {"started_at": None, "stages": {}, **collected}
 
     with _AGENTIC_RUNS_LOCK:
-        return _AGENTIC_RUNS.pop(run_id, {"started_at": None, "stages": {}})
+        run_record = _AGENTIC_RUNS.pop(run_id, {"started_at": None, "stages": {}})
+
+    return {**run_record, **collected}
 
 
 def _record_stage_event(
@@ -175,7 +190,7 @@ async def literature_search(
     topics: list[str],
     max_results_per_db: int = 10
 ) -> dict:
-    """Search academic databases (arXiv, Semantic Scholar) for research papers.
+    """Search academic databases (arXiv, Semantic Scholar, Crossref) for research papers.
 
     Args:
         topics: List of research topics/queries to search for.
@@ -185,12 +200,26 @@ async def literature_search(
         Dict containing status and retrieved papers.
     """
     from core.tools.search_tools import search_multiple_databases
-    
-    records = await search_multiple_databases(topics, max_results_per_db=max_results_per_db)
-    
+
+    seen_ids: set = set()
+    records: list = []
+    databases_searched: set = set()
+    for topic in topics:
+        papers, searched = await search_multiple_databases(
+            topic, max_results_per_db=max_results_per_db
+        )
+        databases_searched.update(searched)
+        for p in papers:
+            d = p.to_dict()
+            paper_id = d.get("paper_id")
+            if paper_id in seen_ids:
+                continue
+            seen_ids.add(paper_id)
+            records.append(d)
+
     with _AGENTIC_STATE_LOCK:
         _AGENTIC_STATE["papers"].extend(records)
-        
+
     validation = await _validate_stage_or_raise(
         stage="literature_review",
         state_snapshot={
@@ -200,14 +229,15 @@ async def literature_search(
             "papers": records,
         },
     )
-    
+
     payload = {
         "status": "completed",
         "papers_found": len(records),
         "queries": topics,
+        "databases_searched": sorted(databases_searched),
         "validation": validation,
     }
-    
+
     _record_stage_event("literature_review", payload, validation=validation)
     return payload
 
