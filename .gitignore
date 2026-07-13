@@ -39,4 +39,5 @@ llama-server
 vllm_wsl_setup/local/gemma-4-*
 vllm_wsl_setup/local/llama-server
 
-
+#Claude Code
+CLAUDE.md
