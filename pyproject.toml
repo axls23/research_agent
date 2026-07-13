@@ -26,6 +26,7 @@ build-backend = "hatchling.build"
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 addopts = "-v"
+asyncio_mode = "auto"
 
 [tool.black]
 line-length = 88

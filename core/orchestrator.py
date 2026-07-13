@@ -233,8 +233,13 @@ def _last_message_content(response: Any) -> str:
     return content if isinstance(content, str) else str(content)
 
 
-def _execute_subagent_inline(cfg: Dict[str, Any], query: str) -> AgentResult:
-    """Run a subagent synchronously and return the structured result contract."""
+async def _execute_subagent_inline(cfg: Dict[str, Any], query: str) -> AgentResult:
+    """Run a subagent and return the structured result contract.
+
+    Must go through ainvoke: every tool in core/agent_tools.py is async def,
+    and LangGraph's sync ToolNode path raises NotImplementedError for
+    async-only tools (StructuredTool has no sync _run in that case).
+    """
     name = cfg["name"]
     cap = cfg.get("capability")
     version = cap.version if cap is not None else ""
@@ -250,7 +255,7 @@ def _execute_subagent_inline(cfg: Dict[str, Any], query: str) -> AgentResult:
             )
             cfg["runnable"] = runnable
 
-        response = runnable.invoke({"messages": [("user", query)]})
+        response = await runnable.ainvoke({"messages": [("user", query)]})
         summary = _last_message_content(response)
         duration_ms = int((time.perf_counter() - start) * 1000)
         _ledger_finish(job_id, ok=True, payload=summary)
@@ -308,11 +313,11 @@ def _make_subagent_tool(cfg: Dict[str, Any]) -> Any:
     name = cfg["name"]
     description = cfg["description"]
 
-    def call_subagent(query: str) -> str:
+    async def call_subagent(query: str) -> str:
         if resolve_dispatch(cfg.get("capability")) == "queue":
             result = _dispatch_subagent_to_queue(cfg, query)
         else:
-            result = _execute_subagent_inline(cfg, query)
+            result = await _execute_subagent_inline(cfg, query)
         return json.dumps(result, ensure_ascii=False, default=str)
 
     func_name = name.replace("-", "_")
@@ -404,6 +409,7 @@ async def run_agentic_pipeline(
     research_goals: List[str],
     model: Optional[str] = None,
     rigor_level: str = "prisma",
+    enable_external_search: bool = False,
 ) -> Dict[str, Any]:
     """
     Run the research pipeline in agentic mode using ReAct reasoning.
@@ -484,6 +490,16 @@ async def run_agentic_pipeline(
         )
     )
 
+    literature_instruction = (
+        "The user has explicitly enabled external literature search for this "
+        "session. You MUST call literature-search early in this run to retrieve "
+        "real papers (arXiv/Semantic Scholar/Crossref) on this topic before "
+        "writing findings, regardless of local dark-data availability."
+        if enable_external_search
+        else "Use literature-search only if the goals explicitly require external "
+        "public literature."
+    )
+
     user_message = (
         f"Conduct a NEXUS cross-domain discovery run on: {research_topic}\n\n"
         f"Project: {project_name}\n"
@@ -495,8 +511,8 @@ async def run_agentic_pipeline(
         + workflow_instruction
         + " Start by ingesting local dark data, then process, translate jargon into "
         "shared principles, extract the knowledge graph, analyze for cross-silo "
-        "isomorphic mappings, and write findings. Use literature-search only if the "
-        "goals explicitly require external public literature. "
+        "isomorphic mappings, and write findings. "
+        + literature_instruction + " "
         "Ensure the PRISMA checklist methodology is strictly enforced in all task delegations. Check coverage after extraction and loop back if needed."
     )
 
@@ -529,4 +545,7 @@ async def run_agentic_pipeline(
 
     if isinstance(result, dict):
         result["agentic_validation"] = stage_summary
+        for key in ("papers", "chunks", "knowledge_entities", "hyperedges", "audit_log"):
+            if stage_summary.get(key):
+                result[key] = stage_summary[key]
     return result

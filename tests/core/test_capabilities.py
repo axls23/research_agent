@@ -61,7 +61,7 @@ class _FakeRunnable:
         self.error = error
         self.calls = []
 
-    def invoke(self, payload):
+    async def ainvoke(self, payload):
         self.calls.append(payload)
         if self.error is not None:
             raise self.error
@@ -187,14 +187,14 @@ class TestDispatchResolution:
 
 
 class TestInlineExecution:
-    def test_supervisor_receives_real_result(self, monkeypatch):
+    async def test_supervisor_receives_real_result(self, monkeypatch):
         monkeypatch.delenv("NEXUS_AGENT_DISPATCH", raising=False)
         _disable_ledger(monkeypatch)
         runnable = _FakeRunnable(reply="found 3 principles")
         cfg = _make_cfg(runnable=runnable)
 
         subagent_tool = _make_subagent_tool(cfg)
-        result = json.loads(subagent_tool.func("translate jargon"))
+        result = json.loads(await subagent_tool.ainvoke("translate jargon"))
 
         assert result["agent"] == "stub-agent"
         assert result["status"] == "ok"
@@ -205,19 +205,19 @@ class TestInlineExecution:
         # The subagent actually ran, with the query the supervisor sent.
         assert runnable.calls == [{"messages": [("user", "translate jargon")]}]
 
-    def test_error_is_surfaced_not_swallowed(self, monkeypatch):
+    async def test_error_is_surfaced_not_swallowed(self, monkeypatch):
         monkeypatch.delenv("NEXUS_AGENT_DISPATCH", raising=False)
         _disable_ledger(monkeypatch)
         cfg = _make_cfg(runnable=_FakeRunnable(error=RuntimeError("neo4j down")))
 
         subagent_tool = _make_subagent_tool(cfg)
-        result = json.loads(subagent_tool.func("extract entities"))
+        result = json.loads(await subagent_tool.ainvoke("extract entities"))
 
         assert result["status"] == "error"
         assert "neo4j down" in result["error"]
         assert result["agent"] == "stub-agent"
 
-    def test_ledger_records_inline_run(self, monkeypatch):
+    async def test_ledger_records_inline_run(self, monkeypatch):
         monkeypatch.delenv("NEXUS_AGENT_DISPATCH", raising=False)
         from core import job_queue
 
@@ -237,14 +237,14 @@ class TestInlineExecution:
         )
 
         cfg = _make_cfg(runnable=_FakeRunnable())
-        result = json.loads(_make_subagent_tool(cfg).func("q"))
+        result = json.loads(await _make_subagent_tool(cfg).ainvoke("q"))
 
         assert result["job_id"] == 7
         # Inline ledger rows start IN_PROGRESS so a live worker can't steal them.
         assert recorded["status"] == "IN_PROGRESS"
         assert recorded["completed"] == 7
 
-    def test_ledger_failure_does_not_break_run(self, monkeypatch):
+    async def test_ledger_failure_does_not_break_run(self, monkeypatch):
         monkeypatch.delenv("NEXUS_AGENT_DISPATCH", raising=False)
         from core import job_queue
 
@@ -254,7 +254,7 @@ class TestInlineExecution:
         monkeypatch.setattr(job_queue, "enqueue_job", _boom)
         cfg = _make_cfg(runnable=_FakeRunnable(reply="still fine"))
 
-        result = json.loads(_make_subagent_tool(cfg).func("q"))
+        result = json.loads(await _make_subagent_tool(cfg).ainvoke("q"))
         assert result["status"] == "ok"
         assert result["summary"] == "still fine"
         assert result["job_id"] is None
@@ -266,7 +266,7 @@ class TestInlineExecution:
 
 
 class TestQueueDispatch:
-    def test_queue_mode_returns_queued_envelope(self, monkeypatch):
+    async def test_queue_mode_returns_queued_envelope(self, monkeypatch):
         from core import job_queue
 
         captured = {}
@@ -280,7 +280,7 @@ class TestQueueDispatch:
         )
 
         cfg = _make_cfg(dispatch="queue")
-        result = json.loads(_make_subagent_tool(cfg).func("q"))
+        result = json.loads(await _make_subagent_tool(cfg).ainvoke("q"))
 
         assert result["status"] == "queued"
         assert result["job_id"] == 11
