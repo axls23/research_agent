@@ -1,0 +1,37 @@
+# Clean, UTF-8 requirements list derived from actual imports in the codebase.
+# Supersedes the corrupted (UTF-16) requirements-phase1.txt for local dev.
+# Local-first stack only: Ollama via langchain-ollama, optional vLLM via langchain-openai.
+
+# --- Web API / serving ---
+fastapi>=0.110.0
+uvicorn>=0.29.0
+python-dotenv>=1.0.0
+pydantic>=2.6.0
+
+# --- LangChain / LangGraph orchestration ---
+langchain>=0.2.0
+langchain-core>=0.2.0
+langchain-ollama>=0.2.0
+langchain-openai>=0.1.0
+langchain-text-splitters>=0.2.0
+langgraph>=0.1.0
+
+# --- Literature search & document handling ---
+aiohttp>=3.9.0
+feedparser>=6.0.0
+arxiv>=2.1.0
+PyPDF2>=3.0.0
+tiktoken>=0.7.0
+
+# --- Knowledge graph / entity extraction ---
+neo4j>=5.20.0
+gliner>=0.2.13
+sentence-transformers>=2.7.0
+
+# --- Config / misc ---
+PyYAML>=6.0
+numpy>=1.26.0
+typing_extensions>=4.11.0
+
+# --- CLI TUI (cli.py) ---
+textual>=0.58.0
