@@ -4,13 +4,12 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { BrainCircuit, Menu, X, Upload, MessageSquare, GitBranch, BookOpen, Activity } from "lucide-react";
+import { BrainCircuit, Menu, X, Upload, GitBranch, BookOpen, Activity } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const navLinks = [
-    { href: "/", label: "Home" },
+    { href: "/workspace", label: "Workspace" },
     { href: "/upload", label: "Upload", icon: Upload },
-    { href: "/chat", label: "Research Chat", icon: MessageSquare },
     { href: "/backend", label: "Backend Monitor", icon: Activity },
     { href: "/workflow", label: "Workflow", icon: GitBranch },
     { href: "/about", label: "Architecture", icon: BookOpen },
@@ -73,14 +72,14 @@ export default function Navbar() {
                 {/* CTA + Mobile Toggle */}
                 <div className="flex items-center gap-3">
                     <Link
-                        href="/chat"
+                        href="/workspace"
                         className="hidden md:inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-white transition-all duration-200"
                         style={{
                             background: "linear-gradient(135deg, #6366f1, #22d3ee)",
                             boxShadow: "0 0 20px rgba(99,102,241,0.3)",
                         }}
                     >
-                        <MessageSquare className="w-3.5 h-3.5" />
+                        <BrainCircuit className="w-3.5 h-3.5" />
                         Start Research
                     </Link>
                     <button

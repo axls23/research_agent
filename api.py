@@ -632,33 +632,6 @@ def _row_to_job_dict(row: tuple) -> Dict[str, Any]:
     }
 
 
-@app.get("/api/jobs")
-async def list_jobs(agent_name: Optional[str] = None, limit: int = 50):
-    if not Path(JOB_QUEUE_DB_PATH).exists():
-        return {"jobs": []}
-
-    try:
-        with sqlite3.connect(JOB_QUEUE_DB_PATH) as conn:
-            cursor = conn.cursor()
-            if agent_name:
-                cursor.execute(
-                    "SELECT id, agent_name, payload, status, created_at, updated_at, result "
-                    "FROM jobs WHERE agent_name = ? ORDER BY created_at DESC LIMIT ?",
-                    (agent_name, limit),
-                )
-            else:
-                cursor.execute(
-                    "SELECT id, agent_name, payload, status, created_at, updated_at, result "
-                    "FROM jobs ORDER BY created_at DESC LIMIT ?",
-                    (limit,),
-                )
-            rows = cursor.fetchall()
-    except sqlite3.Error:
-        return {"jobs": []}
-
-    return {"jobs": [_row_to_job_dict(row) for row in rows]}
-
-
 @app.get("/api/jobs/{job_id}")
 async def get_job(job_id: int):
     if not Path(JOB_QUEUE_DB_PATH).exists():
@@ -687,7 +660,7 @@ async def chat_endpoint_get():
     return {
         "status": "ok",
         "message": (
-            "Use POST /api/chat or /api/chat/stream with JSON body: "
+            "Use POST /api/chat/stream with JSON body: "
             "{\"message\": \"...\", \"use_harness\": true, "
             "\"rigor_level\": \"prisma\", \"mode\": \"default\"}"
         ),
@@ -823,16 +796,6 @@ async def chat_stream_endpoint(req: ChatRequest):
         "X-Accel-Buffering": "no",
     }
     return StreamingResponse(_event_stream(), media_type="text/event-stream", headers=headers)
-
-@app.post("/api/chat", response_model=ChatResponse)
-async def chat_endpoint(req: ChatRequest):
-    try:
-        result_state = await run_research_pipeline(**_build_pipeline_kwargs(req))
-
-        payload = _build_chat_payload(result_state)
-        return ChatResponse(**payload)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 def _persist_chunks_to_neo4j(chunks: List[Dict[str, Any]], paper_id: str) -> Dict[str, Any]:
