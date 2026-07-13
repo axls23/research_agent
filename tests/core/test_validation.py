@@ -11,7 +11,6 @@ Validates:
 import sys
 from pathlib import Path
 from unittest.mock import patch
-import asyncio
 
 import pytest
 
@@ -26,16 +25,6 @@ from core.tools.validation_tools import (
     run_validation_gate,
 )
 from core.nodes.quality_validator_node import quality_validator_node
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _run(coro):
-    """Run an async coroutine synchronously for test convenience."""
-    return asyncio.get_event_loop().run_until_complete(coro)
 
 
 def _make_state(**overrides) -> ResearchState:
@@ -396,7 +385,7 @@ class TestRunValidationGate:
 
 class TestQualityValidatorNode:
     @patch("core.nodes.quality_validator_node.run_validation_gate")
-    def test_returns_validation_passed(self, mock_gate):
+    async def test_returns_validation_passed(self, mock_gate):
         mock_gate.return_value = ValidationReport(
             gate_name="post_literature_review",
             rigor_level="prisma",
@@ -407,11 +396,11 @@ class TestQualityValidatorNode:
         )
         state = _make_state(rigor_level="prisma")
         state["current_node"] = "literature_review"
-        result = _run(quality_validator_node(state))
+        result = await quality_validator_node(state)
         assert result["last_validation_passed"] is True
 
     @patch("core.nodes.quality_validator_node.run_validation_gate")
-    def test_returns_validation_failed(self, mock_gate):
+    async def test_returns_validation_failed(self, mock_gate):
         mock_gate.return_value = ValidationReport(
             gate_name="post_literature_review",
             rigor_level="prisma",
@@ -422,11 +411,11 @@ class TestQualityValidatorNode:
         )
         state = _make_state(rigor_level="prisma")
         state["current_node"] = "literature_review"
-        result = _run(quality_validator_node(state))
+        result = await quality_validator_node(state)
         assert result["last_validation_passed"] is False
 
     @patch("core.nodes.quality_validator_node.run_validation_gate")
-    def test_appends_to_validation_reports(self, mock_gate):
+    async def test_appends_to_validation_reports(self, mock_gate):
         mock_gate.return_value = ValidationReport(
             gate_name="post_data_processing",
             rigor_level="prisma",
@@ -438,11 +427,11 @@ class TestQualityValidatorNode:
         state = _make_state(rigor_level="prisma")
         state["current_node"] = "data_processing"
         state["validation_reports"] = []
-        result = _run(quality_validator_node(state))
+        result = await quality_validator_node(state)
         assert len(result["validation_reports"]) == 1
 
     @patch("core.nodes.quality_validator_node.run_validation_gate")
-    def test_appends_audit_entry(self, mock_gate):
+    async def test_appends_audit_entry(self, mock_gate):
         mock_gate.return_value = ValidationReport(
             gate_name="post_analysis",
             rigor_level="cochrane",
@@ -453,12 +442,12 @@ class TestQualityValidatorNode:
         )
         state = _make_state(rigor_level="cochrane")
         state["current_node"] = "analysis"
-        result = _run(quality_validator_node(state))
+        result = await quality_validator_node(state)
         assert len(result["audit_log"]) >= 1
         assert result["audit_log"][-1]["agent"] == "quality_validator_node"
 
     @patch("core.nodes.quality_validator_node.run_validation_gate")
-    def test_gate_name_mapping(self, mock_gate):
+    async def test_gate_name_mapping(self, mock_gate):
         """current_node 'literature_review' maps to gate 'post_literature_review'."""
         mock_gate.return_value = ValidationReport(
             gate_name="post_literature_review",
@@ -470,7 +459,7 @@ class TestQualityValidatorNode:
         )
         state = _make_state(rigor_level="prisma")
         state["current_node"] = "literature_review"
-        _run(quality_validator_node(state))
+        await quality_validator_node(state)
         mock_gate.assert_called_once()
         call_gate = mock_gate.call_args[0][1]
         assert call_gate == "post_literature_review"
